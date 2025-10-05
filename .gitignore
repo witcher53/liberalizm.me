@@ -1,0 +1,10 @@
+# 🔑 KRİTİK GİZLİ ANAHTARLAR (ASLA GİTMEMELİ)
+.env
+ecosystem.config.js # Eğer bu dosya buraya taşınırsa diye önlem olarak kalsın
+
+# 📦 NODE BAĞIMLILIKLARI VE TEMİZLİK
+/node_modules
+package-lock.json # package.json kalsın ama lock dosyası genelde gitmez
+*.save
+*.txt # test.txt dosyanın gitmesini engeller
+*.html.save*

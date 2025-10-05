@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title data-i18n="page_title">Mesajlasma</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta charset="UTF-8">
+    <link rel="stylesheet" href="/style.css?v=3">
+    <style>
+        #lang-switcher { position: absolute; top: 10px; right: 150px; z-index: 300; }
+        #lang-switcher button { background: #444; border: 1px solid #666; color: white; padding: 5px 8px; cursor: pointer; border-radius: 3px; }
+        #lang-switcher button.active { background: #5865f2; }
+    </style>
+    <script src="/purify.min.js"></script>
+</head>
+<body>
+    <div id="login-overlay">
+        <div id="login-box">
+            <h1 data-i18n="login_title">Anonim Sohbet Girişi</h1>
+            <p style="font-size: 0.85rem; color: #aaa; margin: 1.5rem 0;" data-i18n="login_disclaimer">
+                Önemli: Devam ederek...
+            </p>
+            <input type="text" id="name-input" data-i18n-placeholder="username_placeholder" maxlength="15">
+            <input type="password" id="password-input" data-i18n-placeholder="password_placeholder" style="margin: 10px 0;">
+            <button id="submit-name" data-i18n="login_button">Giriş Yap</button>
+        </div>
+    </div>
+    <div id="main-container" style="display: none;">
+        <div id="user-list-container">
+            <h3 data-i18n="conversations_title">Sohbetler</h3>
+            <div id="conversations"></div>
+            <hr>
+            <h3 data-i18n="online_users_title">Online</h3>
+            <div id="online-users"></div>
+        </div>
+        <div id="app-container">
+            <div id="header">
+                <h1 id="chat-title" data-i18n="chat_title_default">Sohbet Seç</h1>
+                <div id="lang-switcher">
+                    <button id="lang-tr">TR</button>
+                    <button id="lang-en">EN</button>
+                </div>
+                <button id="sound-toggle" data-i18n="sound_toggle_off">🔇 Ses Kapalı</button>
+            </div>
+            <ul id="messages"></ul>
+            <form id="form" action="">
+                <input id="input" autocomplete="off" data-i18n-placeholder="input_placeholder_default" disabled /><button disabled data-i18n="send_button">Gönder</button>
+            </form>
+        </div>
+    </div>
+    <script src="/sodium.js"></script>
+    <script src="/socket.io/socket.io.js"></script>
+    <script src="/client.js?v=28"></script>
+</body>
+</html>
