@@ -1,4 +1,4 @@
-// /var/www/liberalizm.me/index.js (GÜVENLİ .ENV SÜRÜMÜ)
+// /var/www/liberalizm.me/index.js (GÜVENLİ .ENV SÜRÜMÜ + TTL GARANTİSİ)
 
 require('dotenv').config();
 
@@ -95,6 +95,7 @@ app.use(express.static(__dirname));
 
 if (!process.env.MONGODB_URI) {
     console.error("❌ KRİTİK HATA: .env dosyasında MONGODB_URI tanımlı değil! Uygulama başlatılamıyor.");
+    process.error("Lütfen projenin ana dizinine .env dosyası oluşturup MANUAL_FPE_KEY ve FPE_KEY_HASH_CHECK değerlerini tanımlayın.");
     process.exit(1);
 }
 const uri = process.env.MONGODB_URI;
@@ -130,6 +131,60 @@ function initializeFPEKey() {
     console.log("✅ FPE MASTER KEY .env dosyasından doğrulandı ve RAM'e Yüklendi!");
 }
 
+// ==============================================================================
+// YENİ TTL KENDİ KENDİNİ DOĞRULAMA FONKSİYONU
+// ==============================================================================
+async function verifyTTLIndex(db) {
+    const COLLECTION_NAME = 'general_messages';
+    // 24 SAAT = 86400 SANİYE (TTL Index'i saniye cinsinden süre ister)
+    const EXPIRE_AFTER_SECONDS = 86400; 
+    const INDEX_KEY = 'expireAt';
+    const INDEX_NAME = 'general_chat_expire_at';
+
+    try {
+        const collection = db.collection(COLLECTION_NAME);
+        const indexes = await collection.indexes();
+        
+        // 1. Mevcut doğru indeksi arar (isim, süre ve anahtar uyumu)
+        const ttlIndexCorrect = indexes.find(i => 
+            i.name === INDEX_NAME && 
+            i.expireAfterSeconds === EXPIRE_AFTER_SECONDS && 
+            i.key.hasOwnProperty(INDEX_KEY) && 
+            !i.partialFilterExpression // KRİTİK: PARTIAL olmamalı!
+        );
+
+        if (ttlIndexCorrect) {
+            console.log(`✅ TTL Index '${INDEX_NAME}' doğru ayarlanmış: Silme süresi 24 saat.`);
+            return;
+        }
+
+        // 2. Eğer index bozuksa (eski, yanlış süre, PARTIAL) önce eskisini sil
+        const oldIndex = indexes.find(i => i.name === INDEX_NAME || i.key.hasOwnProperty(INDEX_KEY));
+        if (oldIndex) {
+            console.warn(`⚠️ Eski/Bozuk TTL Index '${oldIndex.name || INDEX_NAME}' bulundu, siliniyor...`);
+            await collection.dropIndex(oldIndex.name || INDEX_NAME);
+        }
+        
+        // 3. Yeniden, doğru ayarlarla kur (TTL Garantisi)
+        console.log(`🔨 Yeni TTL Index '${INDEX_NAME}' kuruluyor (24 saat)...`);
+        await collection.createIndex(
+            { [INDEX_KEY]: 1 },
+            { 
+                name: INDEX_NAME, 
+                expireAfterSeconds: EXPIRE_AFTER_SECONDS, 
+                background: true 
+            }
+        );
+        console.log(`✅ TTL Index başarıyla kuruldu ve doğrulandı!`);
+
+    } catch (err) {
+        // KRİTİK HATA: Eğer index'i kuramazsak, uygulama çalışmamalı!
+        console.error(`❌ KRİTİK HATA: TTL Index kontrolü/kurulumu BAŞARISIZ OLDU. Uygulama kapatılıyor. Hata: ${err.message}`);
+        process.exit(1); 
+    }
+}
+// ==============================================================================
+
 
 async function run() {
     try {
@@ -144,16 +199,13 @@ async function run() {
 
         console.log("MongoDB Atlas'a başarıyla bağlanıldı!");
         
+        // **********************************************
+        // YENİ TTL GARANTİSİ KONTROLÜ
+        await verifyTTLIndex(database);
+        // **********************************************
+        
         try {
-            await generalMessagesCollection.createIndex(
-                { "expireAt": 1 }, 
-                { 
-                    name: "general_chat_expire_at", 
-                    expireAfterSeconds: 0, 
-                    partialFilterExpression: { "expireAt": { "$exists": true } }
-                }
-            );
-            
+            // DM'ler ve User Token Indexleri (Bunlar artık verifyTTLIndex'te değil, burada kalabilir)
             await dmMessagesCollection.createIndex(
                  { "senderToken": 1, "recipientToken": 1, "timestamp": -1 }, 
                  { name: "dm_token_speedup" } 
@@ -164,7 +216,7 @@ async function run() {
                  { name: "user_last_token_lookup", unique: false, sparse: true } 
             );
 
-            console.log("Koleksiyon İndeksleri başarıyla oluşturuldu.");
+            console.log("Diğer Koleksiyon İndeksleri başarıyla doğrulandı.");
             
         } catch (err) {
             if (err.codeName === 'IndexKeySpecsConflict' || err.code === 48 || err.code === 67 || err.code === 85) {
@@ -184,8 +236,8 @@ async function run() {
 }
 run();
 
-// Buradan sonraki kodun geri kalanında değişiklik yapmaya gerek yok, hepsi aynı kalabilir.
-// ... (sendUpdatedUserList ve io.on('connection', ...) fonksiyonları ve devamı)
+// Buradan sonraki kodun geri kalanı aynı kalır (io.on, socket.on, sendUpdatedUserList, vs.)
+
 async function sendUpdatedUserList() {
     if (!redisClient.isReady) {
         console.error('Redis istemcisi hazır değil, kullanıcı listesi güncellenemedi.');
@@ -411,13 +463,13 @@ io.on('connection', async (socket) => {
         if (!socket.username || !msg.message) return;
         
         const expireDate = new Date();
-        expireDate.setDate(expireDate.getDate() + 1);
+        expireDate.setSeconds(expireDate.getSeconds() + 86400); // 24 saat sonra silinir
         
         const data = { 
             username: socket.username, 
             message: msg.message, 
             timestamp: new Date(), 
-            expireAt: expireDate 
+            expireAt: expireDate // TTL Garantisi ile silinecek
         }; 
         
         try {
