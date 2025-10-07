@@ -1,4 +1,4 @@
-// /var/www/liberalizm.me/index.js (FİNAL SÜRÜM v2.3: Önce Yayınla, Sonra Kaydet Optimizasyonu)
+// /var/www/liberalizm.me/index.js (FİNAL PERFORMANS v2 + SOKET GÜVENLİĞİ v3 - DÜZELTİLDİ)
 
 require('dotenv').config();
 
@@ -10,21 +10,43 @@ const { MongoClient } = require('mongodb');
 const { createClient } = require('redis');
 const crypto = require('crypto');
 const cors = require('cors');
-const { createAdapter } = require('@socket.io/redis-adapter'); 
+const { createAdapter } = require('@socket.io/redis-adapter');
+const nacl = require('tweetnacl');
+const { RateLimiterMemory } = require('rate-limiter-flexible');
 
-// Güvenlik ve yardımcı fonksiyonlar
 let FPE_MASTER_KEY = null;
 const SERVER_SECRET_KEY = process.env.SERVER_SECRET_KEY ? Buffer.from(process.env.SERVER_SECRET_KEY, 'hex') : null;
 const ALGORITHM = 'aes-256-gcm';
-const IV_LENGTH = 16;
+const IV_LENGTH = 12; 
 const AUTH_TAG_LENGTH = 16;
 if (!SERVER_SECRET_KEY || SERVER_SECRET_KEY.length !== 32) { console.error("❌ KRİTİK GÜVENLİK HATASI: .env dosyasında 32 byte'lık (64 hex karakter) bir SERVER_SECRET_KEY tanımlanmalı!"); process.exit(1); }
-function encryptPointer(publicKey) { const iv = crypto.randomBytes(IV_LENGTH); const cipher = crypto.createCipheriv(ALGORITHM, SERVER_SECRET_KEY, iv); let encrypted = cipher.update(publicKey, 'utf8', 'hex'); encrypted += cipher.final('hex'); const authTag = cipher.getAuthTag(); return `${iv.toString('hex')}:${authTag.toString('hex')}:${encrypted}`; }
-function decryptPointer(encryptedPointer) { try { const parts = encryptedPointer.split(':'); const iv = Buffer.from(parts[0], 'hex'); const authTag = Buffer.from(parts[1], 'hex'); const encryptedText = parts[2]; const decipher = crypto.createDecipheriv(ALGORITHM, SERVER_SECRET_KEY, iv); decipher.setAuthTag(authTag); let decrypted = decipher.update(encryptedText, 'hex', 'utf8'); decrypted += decipher.final('utf8'); return decrypted; } catch (error) { console.error("İşaretçi çözülürken hata:", error); return null; } }
+
+function encryptPointer(publicKey) {
+    const iv = crypto.randomBytes(IV_LENGTH);
+    const cipher = crypto.createCipheriv(ALGORITHM, SERVER_SECRET_KEY, iv);
+    let encrypted = cipher.update(publicKey, 'utf8', 'hex');
+    encrypted += cipher.final('hex');
+    const authTag = cipher.getAuthTag();
+    return `v1$${iv.toString('hex')}:${authTag.toString('hex')}:${encrypted}`;
+}
+
+function decryptPointer(encryptedPointer) {
+    try {
+        if (!encryptedPointer.startsWith('v1$')) throw new Error('Unknown pointer version');
+        const parts = encryptedPointer.slice(3).split(':');
+        const iv = Buffer.from(parts[0], 'hex');
+        const authTag = Buffer.from(parts[1], 'hex');
+        const encryptedText = parts[2];
+        const decipher = crypto.createDecipheriv(ALGORITHM, SERVER_SECRET_KEY, iv);
+        decipher.setAuthTag(authTag);
+        let decrypted = decipher.update(encryptedText, 'hex', 'utf8');
+        decrypted += decipher.final('utf8');
+        return decrypted;
+    } catch (error) { console.error("İşaretçi çözülürken hata:", error); return null; }
+}
 function pointerFingerprint(publicKey) { return crypto.createHmac('sha256', SERVER_SECRET_KEY).update(publicKey).digest('hex'); }
 function createMasterKey(keyInput) { return crypto.createHash('sha256').update(keyInput).digest(); }
 
-// Uygulama kurulumu
 const app = express();
 const server = http.createServer(app);
 const PORT = 3000;
@@ -47,42 +69,69 @@ run();
 const GENERAL_CHAT_ROOM = 'general_chat_room';
 
 async function updateOnlineUsersCache() { if (!redisClient.isReady) return; try { const onlineKeys = await redisClient.sMembers('online_users_set'); if (onlineKeys.length === 0) { await redisClient.set('online_users_cache', '[]', { EX: 15 }); return; } const multi = redisClient.multi(); for (const key of onlineKeys) { multi.hGetAll(`user:${key}`); } const onlineUsersDataRaw = await multi.exec(); const finalOnlineList = onlineUsersDataRaw.filter(user => user && user.publicKey).map(user => ({ username: user.username, publicKey: user.publicKey })); await redisClient.set('online_users_cache', JSON.stringify(finalOnlineList), { EX: 15 }); } catch (error) { console.error("Online kullanıcı önbelleği güncellenirken hata:", error); } }
+const rateLimiter = new RateLimiterMemory({ points: 10, duration: 1 });
+
+io.use((socket, next) => {
+    rateLimiter.consume(socket.handshake.address)
+        .then(() => {
+            const { publicKey, signature, nonce } = socket.handshake.auth;
+            if (!publicKey || !signature || !nonce) { return next(new Error('Kimlik doğrulama hatası: Bilgiler eksik.')); }
+            try {
+                const signPublicKeyBytes = Buffer.from(publicKey, 'base64');
+                const nonceBuffer = Buffer.from(nonce, 'hex');
+                const signatureBuffer = Buffer.from(signature, 'base64');
+                const isVerified = nacl.sign.detached.verify(nonceBuffer, signatureBuffer, signPublicKeyBytes);
+                if (!isVerified) { return next(new Error('Kimlik doğrulama hatası: İmza geçersiz.')); }
+                socket.signPublicKey = publicKey;
+                next();
+            } catch (e) { console.error("Auth hatası (server):", e.message); return next(new Error('Kimlik doğrulama hatası: Hatalı format.')); }
+        })
+        .catch(() => { next(new Error('Çok fazla istek gönderdiniz. Lütfen yavaşlayın.')); });
+});
 
 io.on('connection', async (socket) => {
-    socket.on('add user', async (userData) => { try { if (!userData.publicKey || !userData.username) return; socket.username = userData.username; socket.publicKey = userData.publicKey; socket.join(userData.publicKey); socket.join(GENERAL_CHAT_ROOM); await redisClient.sAdd('online_users_set', userData.publicKey); await usersCollection.updateOne({ publicKey: userData.publicKey }, { $set: { username: userData.username } }, { upsert: true }); const userKey = `user:${socket.publicKey}`; await redisClient.hSet(userKey, { username: userData.username, publicKey: userData.publicKey, socketId: socket.id }); await redisClient.expire(userKey, 300); const cachedList = await redisClient.get('online_users_cache'); socket.emit('initial user list', cachedList ? JSON.parse(cachedList) : []); socket.to(GENERAL_CHAT_ROOM).emit('user connected', { username: userData.username, publicKey: userData.publicKey }); updateOnlineUsersCache(); } catch (error) { console.error('[HATA] "add user":', error); } });
-    socket.on('disconnect', async () => { if (socket.publicKey) { await redisClient.del(`user:${socket.publicKey}`); await redisClient.sRem('online_users_set', socket.publicKey); io.to(GENERAL_CHAT_ROOM).emit('user disconnected', { publicKey: socket.publicKey }); updateOnlineUsersCache(); } });
-    
-    socket.on('chat message', (msg, callback) => {
-        if (!socket.username || !msg.message) return;
+    socket.on('user authenticated', async (userData) => {
+        try {
+            if (!userData || typeof userData.username !== 'string' || !userData.boxPublicKey) { return; }
+            const username = userData.username.trim();
+            if (username.length < 2 || username.length > 20) { return; }
+            socket.username = username;
+            socket.publicKey = userData.boxPublicKey;
+            socket.join(socket.publicKey);
+            socket.join(GENERAL_CHAT_ROOM);
+            await redisClient.sAdd('online_users_set', socket.publicKey);
+            await usersCollection.updateOne({ publicKey: socket.publicKey }, { $set: { username: socket.username } }, { upsert: true });
+            const userKey = `user:${socket.publicKey}`;
+            await redisClient.hSet(userKey, { username: socket.username, publicKey: socket.publicKey, socketId: socket.id });
+            await redisClient.expire(userKey, 300);
+            const cachedList = await redisClient.get('online_users_cache');
+            socket.emit('initial user list', cachedList ? JSON.parse(cachedList) : []);
 
-        const data = { 
-            username: socket.username, 
-            message: msg.message, 
-            timestamp: new Date()
-        }; 
-
-        // 1. ÖNCE YAYINLA (gönderen hariç)
-        socket.broadcast.to(GENERAL_CHAT_ROOM).emit('chat message', data);
-
-        // 2. SONRA (arka planda) kaydet.
-        const expireDate = new Date();
-        expireDate.setSeconds(expireDate.getSeconds() + 86400);
-        data.expireAt = expireDate;
-
-        generalMessagesCollection.insertOne(data)
-            .then(() => {
-                if (typeof callback === 'function') callback({ status: 'ok' });
-            })
-            .catch(err => {
-                console.error("Genel mesaj kaydedilirken hata:", err);
-                if (typeof callback === 'function') callback({ status: 'error' });
-            });
+            // DEĞİŞTİRİLDİ: "socket.to" yerine "io.to" kullandık.
+            // Bu sayede anonsu yapan kişi (yeni bağlanan kullanıcı) de kendi geldiğini duyar.
+            io.to(GENERAL_CHAT_ROOM).emit('user connected', { username: socket.username, publicKey: socket.publicKey });
+            
+            updateOnlineUsersCache();
+        } catch (error) {
+            console.error('[HATA] "user authenticated":', error);
+        }
     });
 
+    socket.on('disconnect', async () => { if (socket.publicKey) { await redisClient.del(`user:${socket.publicKey}`); await redisClient.sRem('online_users_set', socket.publicKey); io.to(GENERAL_CHAT_ROOM).emit('user disconnected', { publicKey: socket.publicKey }); updateOnlineUsersCache(); } });
+    socket.on('chat message', async (msg, callback) => {
+        if (!socket.username || !msg || typeof msg.message !== 'string') return;
+        const message = msg.message.trim();
+        if (message.length === 0 || message.length > 5000) { if (typeof callback === 'function') callback({ status: 'error', message: 'Geçersiz mesaj.' }); return; }
+        const expireDate = new Date(Date.now() + 86400 * 1000);
+        const data = { username: socket.username, message: message, timestamp: new Date(), expireAt: expireDate };
+        try {
+            await generalMessagesCollection.insertOne(data);
+            socket.broadcast.to(GENERAL_CHAT_ROOM).emit('chat message', data);
+            if (typeof callback === 'function') callback({ status: 'ok' });
+        } catch (err) { if (typeof callback === 'function') callback({ status: 'error' }); }
+    });
     socket.on('get conversations', async () => { if (!socket.publicKey) return; try { const myFingerprint = pointerFingerprint(socket.publicKey); const messages = await dmMessagesCollection.find({ $or: [{ senderFingerprint: myFingerprint }, { recipientFingerprint: myFingerprint }] }).toArray(); const partnerPointers = new Set(); messages.forEach(msg => { partnerPointers.add(msg.senderPointer); partnerPointers.add(msg.recipientPointer); }); const partnerPublicKeys = Array.from(partnerPointers).map(decryptPointer).filter(Boolean); let partners = []; if (partnerPublicKeys.length > 0) { partners = await usersCollection.find({ publicKey: { $in: partnerPublicKeys } }, { projection: { username: 1, publicKey: 1, _id: 0 } }).toArray(); } socket.emit('conversations list', partners); } catch(err) { console.error("Sohbet listesi çekilirken hata:", err); socket.emit('conversations list', []); } });
     socket.on('private message', async (data) => { if (!socket.publicKey || !data.recipientPublicKey) return; const dbData = { senderPointer: encryptPointer(socket.publicKey), recipientPointer: encryptPointer(data.recipientPublicKey), senderFingerprint: pointerFingerprint(socket.publicKey), recipientFingerprint: pointerFingerprint(data.recipientPublicKey), ciphertext_for_recipient: data.ciphertext_for_recipient, ciphertext_for_sender: data.ciphertext_for_sender, timestamp: new Date() }; try { await dmMessagesCollection.insertOne(dbData); if (data.recipientPublicKey !== socket.publicKey) { io.to(data.recipientPublicKey).emit('private message', { ciphertext: data.ciphertext_for_recipient, senderPublicKey: socket.publicKey }); } } catch (err) { console.error("Özel mesaj gönderilirken hata:", err); } });
     socket.onAny(async () => { if (socket.publicKey) { await redisClient.expire(`user:${socket.publicKey}`, 300); } });
     socket.on('get conversation history', async (otherUserPublicKey) => { if (!socket.publicKey) return; let history; if (otherUserPublicKey === null) { history = await generalMessagesCollection.find({}).sort({ _id: -1 }).limit(100).toArray(); history.reverse(); } else { const myFingerprint = pointerFingerprint(socket.publicKey); const otherFingerprint = pointerFingerprint(otherUserPublicKey); history = await dmMessagesCollection.find({ $or: [{ senderFingerprint: myFingerprint, recipientFingerprint: otherFingerprint }, { senderFingerprint: otherFingerprint, recipientFingerprint: myFingerprint }] }).sort({ timestamp: -1 }).limit(100).toArray(); history.reverse(); } socket.emit('conversation history', { history: history, partnerPublicKey: otherUserPublicKey }); });
 });
-
-setInterval(updateOnlineUsersCache, 5000);
