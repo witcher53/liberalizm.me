@@ -1,4 +1,4 @@
-// /var/www/liberalizm.me/index.js (DEBUG MODU AKTİF)
+// /var/www/liberalizm.me/index.js (FİNAL PERFORMANS v2 + SOCKET GÜVENLİĞİ v3 - DÜZELTİLDİ)
 
 require('dotenv').config();
 
@@ -12,14 +12,11 @@ const crypto = require('crypto');
 const cors = require('cors');
 const { createAdapter } = require('@socket.io/redis-adapter');
 const nacl = require('tweetnacl');
-const { RateLimiterMemory } = require('rate-limiter-flexible');
-
-console.log('--- [Sunucu] Kod başlangıcı ---');
 
 let FPE_MASTER_KEY = null;
 const SERVER_SECRET_KEY = process.env.SERVER_SECRET_KEY ? Buffer.from(process.env.SERVER_SECRET_KEY, 'hex') : null;
 const ALGORITHM = 'aes-256-gcm';
-const IV_LENGTH = 12; 
+const IV_LENGTH = 12; // GCM için önerilen 12 byte
 const AUTH_TAG_LENGTH = 16;
 if (!SERVER_SECRET_KEY || SERVER_SECRET_KEY.length !== 32) { console.error("❌ KRİTİK GÜVENLİK HATASI: .env dosyasında 32 byte'lık (64 hex karakter) bir SERVER_SECRET_KEY tanımlanmalı!"); process.exit(1); }
 
@@ -118,53 +115,75 @@ io.use((socket, next) => {
         .catch(() => { console.log(`!!! [Sunucu] Rate limit aşıldı: ${socket.handshake.address}`); next(new Error('Çok fazla istek gönderdiniz. Lütfen yavaşlayın.')); });
 });
 
-io.on('connection', async (socket) => {
-    console.log(`✅ [Sunucu] Bir client bağlandı! Socket ID: ${socket.id}`);
+// DEĞİŞİKLİK: Sunucu tarafı kimlik doğrulama middleware'i (SODIUM BAĞIMLILIĞI KALDIRILDI)
+io.use((socket, next) => {
+    const { publicKey, signature, nonce } = socket.handshake.auth;
 
+    if (!publicKey || !signature || !nonce) {
+        return next(new Error('Kimlik doğrulama hatası: Bilgiler eksik.'));
+    }
+
+    try {
+        const signPublicKeyBytes = Buffer.from(publicKey, 'base64');
+        const nonceBuffer = Buffer.from(nonce, 'hex');
+        const signatureBuffer = Buffer.from(signature, 'base64');
+
+        const isVerified = nacl.sign.detached.verify(
+            nonceBuffer,
+            signatureBuffer,
+            signPublicKeyBytes
+        );
+
+        if (!isVerified) {
+            return next(new Error('Kimlik doğrulama hatası: İmza geçersiz.'));
+        }
+        
+        socket.signPublicKey = publicKey;
+        next();
+    } catch (e) {
+        console.error("Auth hatası (server):", e.message);
+        return next(new Error('Kimlik doğrulama hatası: Hatalı format.'));
+    }
+});
+
+io.on('connection', async (socket) => {
     socket.on('user authenticated', async (userData) => {
-        console.log(`[Sunucu] 'user authenticated' eventi alındı. Kullanıcı: ${userData.username}`);
         try {
-            if (!userData || typeof userData.username !== 'string' || !userData.boxPublicKey) { console.log("!!! [Sunucu] 'user authenticated' eventi geçersiz veri nedeniyle reddedildi."); return; }
-            const username = userData.username.trim();
-            if (username.length < 2 || username.length > 20) { console.log("!!! [Sunucu] 'user authenticated' eventi geçersiz kullanıcı adı uzunluğu nedeniyle reddedildi."); return; }
-            socket.username = username;
+            if (!userData.username || !userData.boxPublicKey) return;
+            socket.username = userData.username;
             socket.publicKey = userData.boxPublicKey;
+            
             socket.join(socket.publicKey);
             socket.join(GENERAL_CHAT_ROOM);
-            
-            console.log(`[Sunucu] ${username} veritabanına ve Redis'e kaydediliyor...`);
+
             await redisClient.sAdd('online_users_set', socket.publicKey);
-            await usersCollection.updateOne({ publicKey: socket.publicKey }, { $set: { username: socket.username } }, { upsert: true });
+            await usersCollection.updateOne({ publicKey: socket.publicKey }, { $set: { username: userData.username } }, { upsert: true });
             const userKey = `user:${socket.publicKey}`;
-            await redisClient.hSet(userKey, { username: socket.username, publicKey: socket.publicKey, socketId: socket.id });
+            await redisClient.hSet(userKey, { username: userData.username, publicKey: socket.publicKey, socketId: socket.id });
             await redisClient.expire(userKey, 300);
             
-            await updateAndBroadcastOnlineUsers();
-            
+            const cachedList = await redisClient.get('online_users_cache');
+            socket.emit('initial user list', cachedList ? JSON.parse(cachedList) : []);
+            socket.to(GENERAL_CHAT_ROOM).emit('user connected', { username: userData.username, publicKey: socket.publicKey });
+            updateOnlineUsersCache();
         } catch (error) {
-            console.error('!!! [Sunucu] "user authenticated" eventinde KRİTİK HATA:', error);
+            console.error('[HATA] "user authenticated":', error);
         }
     });
+
+    socket.on('disconnect', async () => { if (socket.publicKey) { await redisClient.del(`user:${socket.publicKey}`); await redisClient.sRem('online_users_set', socket.publicKey); io.to(GENERAL_CHAT_ROOM).emit('user disconnected', { publicKey: socket.publicKey }); updateOnlineUsersCache(); } });
     
-    socket.on('get conversations', async () => { 
-        console.log(`[Sunucu] '${socket.username}' kullanıcısından 'get conversations' isteği alındı.`);
-        if (!socket.publicKey) return; 
-        try { 
-            const myFingerprint = pointerFingerprint(socket.publicKey); 
-            const messages = await dmMessagesCollection.find({ $or: [{ senderFingerprint: myFingerprint }, { recipientFingerprint: myFingerprint }] }).toArray(); 
-            const partnerPointers = new Set(); 
-            messages.forEach(msg => { partnerPointers.add(msg.senderPointer); partnerPointers.add(msg.recipientPointer); }); 
-            const partnerPublicKeys = Array.from(partnerPointers).map(decryptPointer).filter(Boolean); 
-            let partners = []; 
-            if (partnerPublicKeys.length > 0) { 
-                partners = await usersCollection.find({ publicKey: { $in: partnerPublicKeys } }, { projection: { username: 1, publicKey: 1, _id: 0 } }).toArray(); 
-            } 
-            console.log(`[Sunucu] '${socket.username}' kullanıcısına ${partners.length} adet sohbet gönderiliyor.`);
-            socket.emit('conversations list', partners); 
-        } catch(err) { 
-            console.error("!!! [Sunucu] Sohbet listesi çekilirken hata:", err); 
-            socket.emit('conversations list', []); 
-        } 
+    socket.on('chat message', async (msg, callback) => {
+        if (!socket.username || !msg.message) return;
+        const expireDate = new Date(Date.now() + 86400 * 1000);
+        const data = { username: socket.username, message: msg.message, timestamp: new Date(), expireAt: expireDate };
+        try {
+            await generalMessagesCollection.insertOne(data);
+            socket.broadcast.to(GENERAL_CHAT_ROOM).emit('chat message', data);
+            if (typeof callback === 'function') callback({ status: 'ok' });
+        } catch (err) {
+            if (typeof callback === 'function') callback({ status: 'error' });
+        }
     });
 
     socket.on('get conversation history', async (otherUserPublicKey) => { 
