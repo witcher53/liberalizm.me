@@ -1,10 +1,18 @@
-# 🔑 KRİTİK GİZLİ ANAHTARLAR (ASLA GİTMEMELİ)
+# --- KRİTİK SUNUCU GİZLİ ANAHTARLARI (ASLA GİTMEMELİ) ---
 .env
-ecosystem.config.js # Eğer bu dosya buraya taşınırsa diye önlem olarak kalsın
+vault.hcl
 
-# 📦 NODE BAĞIMLILIKLARI VE TEMİZLİK
+# --- PM2, LOGLAR VE VERİ ---
+ecosystem.config.js
+/opt/vault/         # Vault kalıcı veri klasörü (Garanti olsun diye ekle)
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+# --- NODE MODÜLLERİ ---
 /node_modules
-package-lock.json # package.json kalsın ama lock dosyası genelde gitmez
+
+# --- DİĞER GEÇİCİ DOSYALAR ---
 *.save
-*.txt # test.txt dosyanın gitmesini engeller
+*.txt               # Eğer içinde göndermen gereken önemli not yoksa kalsın.
 *.html.save*

@@ -2,6 +2,7 @@
   "dependencies": {
     "@socket.io/redis-adapter": "^8.3.0",
     "all": "^0.0.0",
+    "axios": "^1.12.2",
     "cors": "^2.8.5",
     "crypto": "^1.0.1",
     "dompurify": "^3.2.7",
