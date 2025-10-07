@@ -264,7 +264,7 @@ io.use((socket, next) => {
 });
 
 io.on('connection', async (socket) => {
-    socket.on('user authenticated', async (userData) => {
+socket.on('user authenticated', async (userData) => {
         try {
             if (!userData.username || !userData.boxPublicKey) return;
             socket.username = userData.username;
@@ -273,20 +273,28 @@ io.on('connection', async (socket) => {
             socket.join(socket.publicKey);
             socket.join(GENERAL_CHAT_ROOM);
 
-            await redisClient.sAdd('online_users_set', socket.publicKey);
+            // Kullanıcı bilgilerini MongoDB'ye kaydet/güncelle
             await usersCollection.updateOne({ publicKey: socket.publicKey }, { $set: { username: userData.username } }, { upsert: true });
-            const userKey = `user:${socket.publicKey}`;
-            await redisClient.hSet(userKey, { username: userData.username, publicKey: socket.publicKey, socketId: socket.id });
-            await redisClient.expire(userKey, 300);
             
-            const cachedList = await redisClient.get('online_users_cache');
-            socket.emit('initial user list', cachedList ? JSON.parse(cachedList) : []);
-            socket.to(GENERAL_CHAT_ROOM).emit('user connected', { username: userData.username, publicKey: socket.publicKey });
-            updateAndBroadcastOnlineUsers();
+            // Kullanıcıyı online set'ine ekle
+            await redisClient.sAdd('online_users_set', socket.publicKey);
+
+            // 1. ANONS: SADECE YENİ BAĞLANAN KİŞİYE GÜNCEL LİSTEYİ GÖNDER
+            // Önce online olan herkesin bilgisini Redis ve Mongo'dan çekiyoruz.
+            const onlineKeys = await redisClient.sMembers('online_users_set');
+            const onlineUsers = await usersCollection.find({ publicKey: { $in: onlineKeys } }, { projection: { username: 1, publicKey: 1, _id: 0 } }).toArray();
+            socket.emit('initial user list', onlineUsers);
+
+            // 2. ANONS: DİĞER HERKESE SADECE YENİ KATILAN KİŞİNİN GELDİĞİNİ HABER VER
+            // `socket.broadcast.emit` komutu, gönderen kişi hariç herkese yollar.
+            socket.broadcast.emit('user connected', { username: userData.username, publicKey: socket.publicKey });
+
         } catch (error) {
             console.error('[HATA] "user authenticated":', error);
         }
     });
+
+
 
     socket.on('get conversations', async () => {
         try {
@@ -382,26 +390,57 @@ io.on('connection', async (socket) => {
         }
     });
 
-    socket.on('disconnect', async () => { 
+socket.on('disconnect', async () => { 
         console.log(`[Sunucu] Bir client ayrıldı: ${socket.username || socket.id}`);
         if (socket.publicKey) { 
+            // Kullanıcıyı Redis'teki online listesinden ve set'ten siliyoruz
             await redisClient.del(`user:${socket.publicKey}`); 
-            await redisClient.sRem('online_users_set', socket.publicKey); 
-            await updateAndBroadcastOnlineUsers();
+            const removedCount = await redisClient.sRem('online_users_set', socket.publicKey); 
+            
+            // Eğer gerçekten listeden birini sildiysek (zaten gitmemişse)
+            // herkese "bu kullanıcı düştü" haberini yolluyoruz.
+            if (removedCount > 0) {
+                 io.emit('user disconnected', { publicKey: socket.publicKey });
+            }
         } 
     });
+
     
+    // DEĞİŞİKLİK BURADA BAŞLIYOR
     socket.on('private message', async (data) => { 
         if (!socket.publicKey || !data.recipientPublicKey) return; 
-        const dbData = { senderPointer: encryptPointer(socket.publicKey), recipientPointer: encryptPointer(data.recipientPublicKey), senderFingerprint: pointerFingerprint(socket.publicKey), recipientFingerprint: pointerFingerprint(data.recipientPublicKey), ciphertext_for_recipient: data.ciphertext_for_recipient, ciphertext_for_sender: data.ciphertext_for_sender, timestamp: new Date() }; 
+        const dbData = { 
+            senderPointer: encryptPointer(socket.publicKey), 
+            recipientPointer: encryptPointer(data.recipientPublicKey), 
+            senderFingerprint: pointerFingerprint(socket.publicKey), 
+            recipientFingerprint: pointerFingerprint(data.recipientPublicKey), 
+            ciphertext_for_recipient: data.ciphertext_for_recipient, 
+            ciphertext_for_sender: data.ciphertext_for_sender, 
+            timestamp: new Date() 
+        }; 
         try { 
             await dmMessagesCollection.insertOne(dbData); 
+
             if (data.recipientPublicKey !== socket.publicKey) { 
-                io.to(data.recipientPublicKey).emit('private message', { ciphertext: data.ciphertext_for_recipient, senderPublicKey: socket.publicKey }); 
-            } 
+                io.to(data.recipientPublicKey).emit('private message', { 
+                    ciphertext: data.ciphertext_for_recipient, 
+                    senderPublicKey: socket.publicKey 
+                }); 
+            }
+            
+            const recipientUser = await usersCollection.findOne(
+                { publicKey: data.recipientPublicKey },
+                { projection: { username: 1, publicKey: 1, _id: 0 } }
+            );
+            if (recipientUser) {
+                socket.emit('new_conversation_partner', recipientUser);
+            }
+
         } catch (err) { 
             console.error("Özel mesaj gönderilirken hata:", err); 
         } 
     });
+    // DEĞİŞİKLİK BURADA BİTİYOR
+
     socket.onAny(async () => { if (socket.publicKey) { await redisClient.expire(`user:${socket.publicKey}`, 300); } });
 });

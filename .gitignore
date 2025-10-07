@@ -16,3 +16,4 @@ yarn-error.log*
 *.save
 *.txt               # Eğer içinde göndermen gereken önemli not yoksa kalsın.
 *.html.save*
+*.zip
