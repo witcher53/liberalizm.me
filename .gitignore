@@ -16,4 +16,16 @@ yarn-error.log*
 *.save
 *.txt               # Eğer içinde göndermen gereken önemli not yoksa kalsın.
 *.html.save*
+<<<<<<< HEAD
 *.zip
+=======
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+/build
+/dist
+.DS_Store
+.npm
+>>>>>>> refactor-frontend
