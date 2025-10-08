@@ -8,3 +8,12 @@ package-lock.json # package.json kalsın ama lock dosyası genelde gitmez
 *.save
 *.txt # test.txt dosyanın gitmesini engeller
 *.html.save*
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+/build
+/dist
+.DS_Store
+.npm

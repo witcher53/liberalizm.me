@@ -65,7 +65,7 @@ const pubClient = redisClient.duplicate();
 const subClient = redisClient.duplicate();
 const io = new socketIo.Server(server, { cors: { origin: "https://liberalizm.me", methods: ["GET", "POST"] } });
 
-app.use(express.static(__dirname));
+app.use(express.static('public'));
 
 if (!process.env.MONGODB_URI) { console.error("❌ KRİTİK HATA: MONGODB_URI ortam değişkeni bulunamadı!"); process.exit(1); }
 const uri = process.env.MONGODB_URI;
