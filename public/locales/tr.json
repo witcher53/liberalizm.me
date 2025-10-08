@@ -24,4 +24,5 @@
   "placeholder_write_message": "Bir mesaj yaz...",
   "log_undecryptable_message": "[Çözülemeyen bir şifreli mesaj.]",
   "system_username": "Sistem"
+  "alert_corrupt_identity": "Kaydedilmiş kimliğiniz bozuk görünüyor. Lütfen site verilerini temizleyip yeni bir kimlik oluşturun."
 }

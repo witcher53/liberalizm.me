@@ -1,5 +1,4 @@
-// Bu dosya, kimlik oluşturma, doğrulama ve saklama gibi tüm giriş işlemlerini yönetir.
-
+// /public/auth.js (Hesap Silme Korumalı Son Hali)
 let identity = null;
 let dom, callbacks, crypto, utils;
 
@@ -29,15 +28,18 @@ export async function checkIdentity() {
     let tempIdentity;
     try {
         tempIdentity = JSON.parse(storedIdentity);
+        // Kimlik bozuksa veya formatı eskiyse, SİLMEK YERİNE UYARI VER.
         if (!tempIdentity.salt || !tempIdentity.encryptedSignPrivateKey || !tempIdentity.signPublicKey) {
             console.warn("Eski veya bozuk kimlik formatı algılandı.");
-            localStorage.removeItem('chatIdentity');
-            dom.loginOverlay.style.display = 'flex';
+            // localStorage.removeItem('chatIdentity'); // BU SATIR SİLİNDİ
+            alert(utils.t('alert_corrupt_identity')); // YENİ UYARI SATIRI
             return;
         }
     } catch (e) {
-        localStorage.removeItem('chatIdentity');
-        dom.loginOverlay.style.display = 'flex';
+        // Kimlik parse edilemezse, SİLMEK YERİNE UYARI VER.
+        console.error("Kimlik parse edilemedi:", e);
+        // localStorage.removeItem('chatIdentity'); // BU SATIR SİLİNDİ
+        alert(utils.t('alert_corrupt_identity')); // YENİ UYARI SATIRI
         return;
     }
 
