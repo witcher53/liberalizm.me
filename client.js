@@ -227,7 +227,40 @@
     
     // --- Geri kalan fonksiyonlar (değişiklik yok) ---
     function activateChat(partner, title) { if (partner && partner.publicKey) { const userElement = document.querySelector(`p[data-public-key="${partner.publicKey}"]`); if (userElement) userElement.classList.remove('new-message-indicator'); } dmPartner = partner; chatTitle.textContent = title; input.placeholder = t('placeholder_write_message'); input.disabled = false; button.disabled = false; const historyTarget = partner ? partner.publicKey : null; socket.emit('get conversation history', historyTarget); }
-    function renderUser(user, container) { const userElement = document.createElement('p'); userElement.dataset.publicKey = user.publicKey; let onlineIndicator = onlineUserMap.has(user.publicKey) ? '<span class="online-indicator">●</span>' : ''; userElement.innerHTML = onlineIndicator + escapeHtml(user.username || 'Bilinmeyen'); if (identity && user.publicKey === identity.publicKey) { userElement.innerHTML += ` ${t('you_suffix')}`; } userElement.onclick = () => activateChat(user, user.username); container.appendChild(userElement); }
+    function renderUser(user, container) {
+    const userElement = document.createElement('p');
+    userElement.dataset.publicKey = user.publicKey;
+
+    // Önce elemanın içini tamamen temizliyoruz.
+    userElement.innerHTML = '';
+
+    // Online göstergesini GÜVENLİ bir şekilde (createElement ile) oluşturup ekliyoruz.
+    if (onlineUserMap.has(user.publicKey)) {
+        const indicatorSpan = document.createElement('span');
+        indicatorSpan.className = 'online-indicator';
+        indicatorSpan.textContent = '●'; // textContent, HTML olarak yorumlanmaz.
+        userElement.appendChild(indicatorSpan);
+        // Başına bir boşluk ekleyelim ki isme yapışmasın
+        userElement.appendChild(document.createTextNode(' '));
+    }
+
+    // Kullanıcı adını GÜVENLİ bir şekilde (createTextNode ile) ekliyoruz.
+    const usernameNode = document.createTextNode(user.username || 'Bilinmeyen');
+    userElement.appendChild(usernameNode);
+
+    // "(Siz)" ekini GÜVENLİ bir şekilde ekliyoruz.
+    if (identity && user.publicKey === identity.publicKey) {
+        const selfSuffixNode = document.createTextNode(` ${t('you_suffix')}`);
+        userElement.appendChild(selfSuffixNode);
+    }
+
+    userElement.onclick = () => activateChat(user, user.username);
+    container.appendChild(userElement);
+}
+
+
+    
+    // DEĞİŞİKLİK BURADA BAŞLIYOR
     function setupSocketListeners() {
         socket.on('initial user list', (users) => { onlineUserMap.clear(); if(users) { users.forEach(user => { onlineUserMap.set(user.publicKey, user); }); } renderOnlineUserList(); });
         socket.on('user connected', (user) => { onlineUserMap.set(user.publicKey, user); renderOnlineUserList(); updateConversationOnlineStatus(user.publicKey, true); });
@@ -236,7 +269,17 @@
         socket.on('conversation history', (data) => { messages.innerHTML = ''; if (!data || !data.history) return; data.history.forEach(msg => { if (!data.partnerPublicKey) { if (!msg.ciphertext_for_recipient) { addChatMessage({ ...msg, isSelf: msg.username === identity.username }); } return; } if (msg.ciphertext_for_recipient) { let isSelf = false; let ciphertextToDecrypt = null; try { const recipientPKBuffer = sodium.from_base64(identity.publicKey); const privateKeyBuffer = sodium.from_base64(identity.privateKey); try { const ciphertextRecipientBuffer = sodium.from_base64(msg.ciphertext_for_recipient); sodium.crypto_box_seal_open(ciphertextRecipientBuffer, recipientPKBuffer, privateKeyBuffer); ciphertextToDecrypt = msg.ciphertext_for_recipient; isSelf = false; } catch (e) { try { const ciphertextSenderBuffer = sodium.from_base64(msg.ciphertext_for_sender); sodium.crypto_box_seal_open(ciphertextSenderBuffer, recipientPKBuffer, privateKeyBuffer); ciphertextToDecrypt = msg.ciphertext_for_sender; isSelf = true; } catch (e2) { throw new Error(t('log_undecryptable_message')); } } const decryptedMessage = sodium.to_string(sodium.crypto_box_seal_open(sodium.from_base64(ciphertextToDecrypt), recipientPKBuffer, privateKeyBuffer)); const senderUsername = isSelf ? identity.username : (dmPartner?.username || onlineUserMap.get(data.partnerPublicKey)?.username || 'Bilinmeyen'); addChatMessage({ username: senderUsername, message: decryptedMessage, timestamp: msg.timestamp, isSelf: isSelf, isEncrypted: true }); } catch (e) { addLog(t('log_undecryptable_message')); console.error(e); } } }); });
         socket.on('private message', (data) => { const senderIsSelf = (data.senderPublicKey === identity.publicKey); const isFromCurrentPartner = dmPartner && data.senderPublicKey === dmPartner.publicKey; if (isFromCurrentPartner || (senderIsSelf && dmPartner && dmPartner.publicKey === identity.publicKey)) { try { const decrypted = sodium.to_string(sodium.crypto_box_seal_open(sodium.from_base64(data.ciphertext), sodium.from_base64(identity.publicKey), sodium.from_base64(identity.privateKey))); const isSelf = senderIsSelf; const senderUsername = isSelf ? identity.username : (onlineUserMap.get(data.senderPublicKey)?.username || 'Bilinmeyen'); if (!isSelf) playSound(); if (!isSelf || (isSelf && dmPartner.publicKey === identity.publicKey)) { addChatMessage({ username: senderUsername, message: decrypted, timestamp: new Date(), isSelf: isSelf, isEncrypted: true }); } } catch (e) { addLog(t('log_undecryptable_message')); console.error("DM decrypt hata:", e); } } else { const userElement = document.querySelector(`p[data-public-key="${data.senderPublicKey}"]`); if (userElement) { userElement.classList.add('new-message-indicator'); playSound(); } } });
         socket.on('chat message', (data) => { if (!dmPartner) { if (identity && data.username !== identity.username) playSound(); addChatMessage({ ...data, isSelf: false }); } });
+        
+        socket.on('new_conversation_partner', (partner) => {
+            const existingUserElement = conversationsDiv.querySelector(`p[data-public-key="${partner.publicKey}"]`);
+            if (!existingUserElement && partner) {
+                renderUser(partner, conversationsDiv);
+                updateConversationOnlineStatus(partner.publicKey, onlineUserMap.has(partner.publicKey));
+            }
+        });
     }
+    // DEĞİŞİKLİK BURADA BİTİYOR
+
     function renderOnlineUserList() { onlineUsersDiv.innerHTML = ''; const sortedUsers = Array.from(onlineUserMap.values()).sort((a, b) => { if (identity && a.publicKey === identity.publicKey) return -1; if (identity && b.publicKey === identity.publicKey) return 1; return a.username.localeCompare(b.username); }); sortedUsers.forEach(user => { renderUser(user, onlineUsersDiv); }); }
     function updateConversationOnlineStatus(publicKey, isOnline) { const userElement = conversationsDiv.querySelector(`p[data-public-key="${publicKey}"]`); if (userElement) { const indicator = userElement.querySelector('.online-indicator'); if (isOnline && !indicator) { userElement.insertAdjacentHTML('afterbegin', '<span class="online-indicator">●</span>'); } else if (!isOnline && indicator) { indicator.remove(); } } }
     form.addEventListener('submit', (e) => {
