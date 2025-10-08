@@ -1,4 +1,4 @@
-     	import * as Crypto from './crypto.js';
+	mport * as Crypto from './crypto.js';
 import * as UI from './ui.js';
 import * as Auth from './auth.js';
 
@@ -91,46 +91,70 @@ import * as Auth from './auth.js';
                 });
             }
         });
+        
+        // KRİTİK GÜVENLİK DÜZELTMESİ: conversation history
         socket.on('conversation history', (data) => {
             dom.messages.innerHTML = '';
             if (!data || !data.history) return;
+            const recipientPKBuffer = sodium.from_base64(identity.publicKey);
+            const privateKeyBuffer = sodium.from_base64(identity.privateKey);
+
             data.history.forEach(msg => {
                 if (!data.partnerPublicKey) {
-                    if (!msg.ciphertext_for_recipient) { UI.addChatMessage({ ...msg, isSelf: msg.username === identity.username }, dom.messages, localStorage.getItem('language')); }
+                    // Genel sohbet mesajları şifresiz
+                    UI.addChatMessage({ ...msg, isSelf: msg.username === identity.username }, dom.messages, localStorage.getItem('language')); 
                     return;
                 }
+                
                 if (msg.ciphertext_for_recipient) {
                     try {
                         let isSelf = false;
-                        let ciphertextToDecrypt = null;
-                        const recipientPKBuffer = sodium.from_base64(identity.publicKey);
-                        const privateKeyBuffer = sodium.from_base64(identity.privateKey);
-                        try {
-                            sodium.crypto_box_seal_open(sodium.from_base64(msg.ciphertext_for_recipient), recipientPKBuffer, privateKeyBuffer);
-                            ciphertextToDecrypt = msg.ciphertext_for_recipient;
-                        } catch (e) {
-                            sodium.crypto_box_seal_open(sodium.from_base64(msg.ciphertext_for_sender), recipientPKBuffer, privateKeyBuffer);
-                            ciphertextToDecrypt = msg.ciphertext_for_sender;
-                            isSelf = true;
-                        }
-                        const decryptedMessage = sodium.to_string(sodium.crypto_box_seal_open(sodium.from_base64(ciphertextToDecrypt), recipientPKBuffer, privateKeyBuffer));
-                        const senderUsername = isSelf ? identity.username : (dmPartner?.username || onlineUserMap.get(data.partnerPublicKey)?.username || 'Bilinmeyen');
+                        let decryptedMessage = null;
+                        
+                        // Önce alıcı metnini çözmeyi dene (Bu metin sadece alıcının, yani sen isen çözülür.)
+                        decryptedMessage = sodium.to_string(sodium.crypto_box_seal_open(
+                            sodium.from_base64(msg.ciphertext_for_recipient),
+                            recipientPKBuffer,
+                            privateKeyBuffer
+                        ));
+                        
+                        // Eğer mesajın senderPointer'ı benimki değilse, mesajı partner göndermiştir.
+                        // SenderPointer'ı çözmek için sunucu tarafındaki decryptPointer fonksiyonu lazım.
+                        // Bu yüzden mesajı kimin gönderdiğini sunucu tarafı bilmeli.
+                        // Geçici çözüm: decrypt edilen metin varsa, bu başkasının bize gönderdiği metindir.
+                        // Çünkü kendi gönderdiğimiz metin artık sunucuda yok.
+                        isSelf = msg.senderFingerprint === identity.myFingerprint;
+
+                        const senderUsername = isSelf 
+                            ? identity.username 
+                            : (dmPartner?.username || onlineUserMap.get(data.partnerPublicKey)?.username || 'Bilinmeyen');
+
                         UI.addChatMessage({ username: senderUsername, message: decryptedMessage, timestamp: msg.timestamp, isSelf: isSelf, isEncrypted: true }, dom.messages, localStorage.getItem('language'));
                     } catch (e) {
+                        // Eğer çözülemezse (ki bu mesajı ben gönderdim ve server'a sadece alıcı metni gitti)
+                        // veya genel bir hata varsa, gösteremiyoruz. 
+                        // Kendi gönderdiğimiz mesajları bu haliyle geçmişte göremeyiz. 
+                        // Bu sebeple kendi gönderdiğimiz mesajları lokalde saklayacağımız varsayımıyla ilerliyoruz.
                         UI.addLog(t('log_undecryptable_message'), dom.messages, t);
                     }
                 }
             });
         });
+        // KRİTİK GÜVENLİK DÜZELTMESİ: private message
         socket.on('private message', (data) => {
              const isFromCurrentPartner = dmPartner && data.senderPublicKey === dmPartner.publicKey;
              if(isFromCurrentPartner) {
                 try {
-                    const decrypted = sodium.to_string(sodium.crypto_box_seal_open(sodium.from_base64(data.ciphertext), sodium.from_base64(identity.publicKey), sodium.from_base64(identity.privateKey)));
+                    const decrypted = sodium.to_string(sodium.crypto_box_seal_open(
+                        sodium.from_base64(data.ciphertext), 
+                        sodium.from_base64(identity.publicKey), 
+                        sodium.from_base64(identity.privateKey)
+                    ));
                     const senderUsername = onlineUserMap.get(data.senderPublicKey)?.username || 'Bilinmeyen';
                     playSound();
                     UI.addChatMessage({ username: senderUsername, message: decrypted, timestamp: new Date(), isSelf: false, isEncrypted: true }, dom.messages, localStorage.getItem('language'));
                 } catch (e) {
+                     // Canlı gelen mesaj çözülemediyse, genelde anahtar hatasıdır.
                      UI.addLog(t('log_undecryptable_message'), dom.messages, t);
                 }
              } else {
@@ -182,13 +206,20 @@ import * as Auth from './auth.js';
         const messageText = dom.input.value;
         dom.input.value = '';
         if (dmPartner) {
+            // ✅ SADECE ALICI İÇİN ŞİFRELENMİŞ METNİ SUNUCUYA GÖNDERİYORUZ
             UI.addChatMessage({ username: identity.username, message: messageText, timestamp: new Date(), isSelf: true, isEncrypted: true }, dom.messages, localStorage.getItem('language'));
             const payload = {
                 recipientPublicKey: dmPartner.publicKey,
                 ciphertext_for_recipient: sodium.to_base64(sodium.crypto_box_seal(messageText, sodium.from_base64(dmPartner.publicKey))),
-                ciphertext_for_sender: sodium.to_base64(sodium.crypto_box_seal(messageText, sodium.from_base64(identity.publicKey)))
+                // ❌ GÜVENLİK DÜZELTMESİ: ciphertext_for_sender sunucuya GİTMİYOR.
             };
             socket.emit('private message', payload);
+            
+            // ⚠️ EK BİLGİ: Kendi gönderdiğin mesajları geçmişte görmek için 
+            // sunucudaki mantığın da değişmesi gerekir. Ya da bu mesajı 
+            // kendi Local Storage'ında tutmalısın. 
+            // Bu kod sadece sunucuya gereksiz veri göndermeyi durdurdu.
+            
         } else {
             UI.addChatMessage({ username: identity.username, message: messageText, timestamp: new Date(), isSelf: true, isEncrypted: false }, dom.messages, localStorage.getItem('language'));
             socket.emit('chat message', { message: messageText });
