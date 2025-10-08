@@ -1,6 +1,6 @@
 {
-"alert_corrupt_identity": "Your saved identity appears to be corrupt. Please clear your site data and create a new identity."  
-"page_title": "Chat",
+  "alert_corrupt_identity": "Your saved identity appears to be corrupt. Please clear your site data and create a new identity.",
+  "page_title": "Chat",
   "login_title": "Anonymous Chat Login",
   "login_disclaimer": "Important: By proceeding, you acknowledge that your authentication keys will be stored encrypted in your browsers local storage. A password is required for security.",
   "username_placeholder": "Username",

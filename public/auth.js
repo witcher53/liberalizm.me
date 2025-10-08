@@ -1,4 +1,4 @@
-// /public/auth.js (Hesap Silme Korumalı Son Hali)
+// /public/auth.js (HESAP SİLME KORUMALI NİHAİ VERSİYON)
 let identity = null;
 let dom, callbacks, crypto, utils;
 
@@ -28,18 +28,14 @@ export async function checkIdentity() {
     let tempIdentity;
     try {
         tempIdentity = JSON.parse(storedIdentity);
-        // Kimlik bozuksa veya formatı eskiyse, SİLMEK YERİNE UYARI VER.
         if (!tempIdentity.salt || !tempIdentity.encryptedSignPrivateKey || !tempIdentity.signPublicKey) {
-            console.warn("Eski veya bozuk kimlik formatı algılandı.");
-            // localStorage.removeItem('chatIdentity'); // BU SATIR SİLİNDİ
-            alert(utils.t('alert_corrupt_identity')); // YENİ UYARI SATIRI
+            console.warn("Bozuk kimlik formatı algılandı. Kimlik SİLİNMEDİ.");
+            alert(utils.t('alert_corrupt_identity'));
             return;
         }
     } catch (e) {
-        // Kimlik parse edilemezse, SİLMEK YERİNE UYARI VER.
-        console.error("Kimlik parse edilemedi:", e);
-        // localStorage.removeItem('chatIdentity'); // BU SATIR SİLİNDİ
-        alert(utils.t('alert_corrupt_identity')); // YENİ UYARI SATIRI
+        console.error("Kimlik parse edilemedi. Kimlik SİLİNMEDİ:", e);
+        alert(utils.t('alert_corrupt_identity'));
         return;
     }
 
