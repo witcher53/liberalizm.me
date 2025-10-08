@@ -1,9 +1,10 @@
-// /serversocket.js (Düzeltilmiş)
+// /serversocket.js (Düzeltilmiş ve Tam Hali)
 const { RateLimiterMemory } = require('rate-limiter-flexible');
 const nacl = require('tweetnacl');
 const { createAdapter } = require('@socket.io/redis-adapter');
 
-// ✅ DÜZELTİLMİŞ: Bitişik dosya adları ve aynı dizinden yükleme.
+// ✅ Not: Aşağıdaki require yolları, dosya yapına göre zaten doğru.
+// 'servercrypto.js' ve 'servermongo.js' dosyaları 'serversocket.js' ile aynı dizinde bulunuyor.
 const Crypto = require('./servercrypto.js');
 const Mongo = require('./servermongo.js');
 
@@ -34,25 +35,51 @@ function initializeSocketListeners(io, redisClient) {
     const messageLimiter = new RateLimiterMemory({ points: 5, duration: 2 });
     const privateMessageLimiter = new RateLimiterMemory({ points: 10, duration: 2 });
 
-    io.use((socket, next) => {
-        rateLimiter.consume(socket.handshake.address)
-            .then(() => {
-                const { publicKey, signature, nonce } = socket.handshake.auth;
-                if (!publicKey || !signature || !nonce) { return next(new Error('Kimlik doğrulama hatası: Bilgiler eksik.')); }
-                try {
-                    const signPublicKeyBytes = Buffer.from(publicKey, 'base64');
-                    const nonceBuffer = Buffer.from(nonce, 'hex');
-                    const signatureBuffer = Buffer.from(signature, 'base64');
-                    const isVerified = nacl.sign.detached.verify(nonceBuffer, signatureBuffer, signPublicKeyBytes);
-                    if (!isVerified) { return next(new Error('Kimlik doğrulama hatası: İmza geçersiz.')); }
-                    socket.signPublicKey = publicKey;
-                    next();
-                } catch (e) { 
-                    console.error("Auth hatası (server):", e.message); 
-                    return next(new Error('Kimlik doğrulama hatası: Hatalı format.')); 
-                }
-            })
-            .catch(() => { next(new Error('Çok fazla istek gönderdiniz. Lütfen yavaşlayın.')); });
+    const NONCE_EXPIRE_SECONDS = 300; // Nonce'lar için 5 dakikalık son kullanma tarihi
+
+    io.use(async (socket, next) => {
+        try {
+            await rateLimiter.consume(socket.handshake.address);
+
+            const { publicKey, signature, nonce } = socket.handshake.auth;
+            if (!publicKey || !signature || !nonce) {
+                return next(new Error('Kimlik doğrulama hatası: Bilgiler eksik.'));
+            }
+
+            // --- REPLAY ATTACK KORUMASI ---
+            const nonceKey = `nonce:${nonce}`;
+            const nonceUsed = await redisClient.get(nonceKey);
+            if (nonceUsed) {
+                return next(new Error('Tekrar saldırısı tespit edildi: Bu anahtar daha önce kullanılmış.'));
+            }
+
+            const nonceTimestampHex = nonce.substring(0, 16);
+            const nonceTimestamp = parseInt(nonceTimestampHex, 16);
+            if (isNaN(nonceTimestamp) || Math.abs(Date.now() - nonceTimestamp) > NONCE_EXPIRE_SECONDS * 1000) {
+                return next(new Error('Kimlik doğrulama hatası: Anahtarın süresi dolmuş.'));
+            }
+            
+            const signPublicKeyBytes = Buffer.from(publicKey, 'base64');
+            const nonceBuffer = Buffer.from(nonce, 'hex');
+            const signatureBuffer = Buffer.from(signature, 'base64');
+            const isVerified = nacl.sign.detached.verify(nonceBuffer, signatureBuffer, signPublicKeyBytes);
+
+            if (!isVerified) {
+                return next(new Error('Kimlik doğrulama hatası: İmza geçersiz.'));
+            }
+
+            await redisClient.setEx(nonceKey, NONCE_EXPIRE_SECONDS, '1');
+
+            socket.signPublicKey = publicKey;
+            next();
+
+        } catch (e) {
+            if (e.msBeforeNext) {
+                return next(new Error('Çok fazla istek gönderdiniz. Lütfen yavaşlayın.'));
+            }
+            console.error("Auth hatası (server):", e.message);
+            return next(new Error('Kimlik doğrulama hatası: Hatalı format veya sunucu hatası.'));
+        }
     });
 
     io.on('connection', async (socket) => {
@@ -132,6 +159,7 @@ function initializeSocketListeners(io, redisClient) {
                     timestamp: new Date() 
                 };
                 
+                // client.js'den ciphertext_for_sender geliyorsa onu da kaydet
                 if(data.ciphertext_for_sender) {
                     dbData.ciphertext_for_sender = data.ciphertext_for_sender;
                 }

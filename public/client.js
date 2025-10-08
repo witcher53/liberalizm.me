@@ -1,4 +1,4 @@
-	mport * as Crypto from './crypto.js';
+import * as Crypto from './crypto.js';
 import * as UI from './ui.js';
 import * as Auth from './auth.js';
 
@@ -92,7 +92,6 @@ import * as Auth from './auth.js';
             }
         });
         
-        // KRİTİK GÜVENLİK DÜZELTMESİ: conversation history
         socket.on('conversation history', (data) => {
             dom.messages.innerHTML = '';
             if (!data || !data.history) return;
@@ -101,46 +100,47 @@ import * as Auth from './auth.js';
 
             data.history.forEach(msg => {
                 if (!data.partnerPublicKey) {
-                    // Genel sohbet mesajları şifresiz
-                    UI.addChatMessage({ ...msg, isSelf: msg.username === identity.username }, dom.messages, localStorage.getItem('language')); 
+                    UI.addChatMessage({ ...msg, isSelf: msg.username === identity.username }, dom.messages, localStorage.getItem('language'));
                     return;
                 }
-                
-                if (msg.ciphertext_for_recipient) {
+
+                let isSelf = false;
+                let ciphertextToDecrypt = null;
+
+                if (msg.ciphertext_for_sender) {
                     try {
-                        let isSelf = false;
-                        let decryptedMessage = null;
-                        
-                        // Önce alıcı metnini çözmeyi dene (Bu metin sadece alıcının, yani sen isen çözülür.)
-                        decryptedMessage = sodium.to_string(sodium.crypto_box_seal_open(
-                            sodium.from_base64(msg.ciphertext_for_recipient),
-                            recipientPKBuffer,
-                            privateKeyBuffer
-                        ));
-                        
-                        // Eğer mesajın senderPointer'ı benimki değilse, mesajı partner göndermiştir.
-                        // SenderPointer'ı çözmek için sunucu tarafındaki decryptPointer fonksiyonu lazım.
-                        // Bu yüzden mesajı kimin gönderdiğini sunucu tarafı bilmeli.
-                        // Geçici çözüm: decrypt edilen metin varsa, bu başkasının bize gönderdiği metindir.
-                        // Çünkü kendi gönderdiğimiz metin artık sunucuda yok.
-                        isSelf = msg.senderFingerprint === identity.myFingerprint;
+                        sodium.crypto_box_seal_open(sodium.from_base64(msg.ciphertext_for_sender), recipientPKBuffer, privateKeyBuffer);
+                        ciphertextToDecrypt = msg.ciphertext_for_sender;
+                        isSelf = true;
+                    } catch (e) {
+                    }
+                }
+                
+                if (!ciphertextToDecrypt && msg.ciphertext_for_recipient) {
+                    try {
+                        sodium.crypto_box_seal_open(sodium.from_base64(msg.ciphertext_for_recipient), recipientPKBuffer, privateKeyBuffer);
+                        ciphertextToDecrypt = msg.ciphertext_for_recipient;
+                        isSelf = false;
+                    } catch (e) {
+                    }
+                }
 
-                        const senderUsername = isSelf 
-                            ? identity.username 
+                if (ciphertextToDecrypt) {
+                    try {
+                        const decryptedMessage = sodium.to_string(sodium.crypto_box_seal_open(sodium.from_base64(ciphertextToDecrypt), recipientPKBuffer, privateKeyBuffer));
+                        const senderUsername = isSelf
+                            ? identity.username
                             : (dmPartner?.username || onlineUserMap.get(data.partnerPublicKey)?.username || 'Bilinmeyen');
-
                         UI.addChatMessage({ username: senderUsername, message: decryptedMessage, timestamp: msg.timestamp, isSelf: isSelf, isEncrypted: true }, dom.messages, localStorage.getItem('language'));
                     } catch (e) {
-                        // Eğer çözülemezse (ki bu mesajı ben gönderdim ve server'a sadece alıcı metni gitti)
-                        // veya genel bir hata varsa, gösteremiyoruz. 
-                        // Kendi gönderdiğimiz mesajları bu haliyle geçmişte göremeyiz. 
-                        // Bu sebeple kendi gönderdiğimiz mesajları lokalde saklayacağımız varsayımıyla ilerliyoruz.
                         UI.addLog(t('log_undecryptable_message'), dom.messages, t);
                     }
+                } else {
+                    UI.addLog(t('log_undecryptable_message'), dom.messages, t);
                 }
             });
         });
-        // KRİTİK GÜVENLİK DÜZELTMESİ: private message
+
         socket.on('private message', (data) => {
              const isFromCurrentPartner = dmPartner && data.senderPublicKey === dmPartner.publicKey;
              if(isFromCurrentPartner) {
@@ -154,7 +154,6 @@ import * as Auth from './auth.js';
                     playSound();
                     UI.addChatMessage({ username: senderUsername, message: decrypted, timestamp: new Date(), isSelf: false, isEncrypted: true }, dom.messages, localStorage.getItem('language'));
                 } catch (e) {
-                     // Canlı gelen mesaj çözülemediyse, genelde anahtar hatasıdır.
                      UI.addLog(t('log_undecryptable_message'), dom.messages, t);
                 }
              } else {
@@ -173,11 +172,21 @@ import * as Auth from './auth.js';
     }
 
     async function startChat(id) {
-        identity = id; // Kimlik bilgisi auth.js'den geldi
+        identity = id; 
         return new Promise((resolve, reject) => {
-            const nonce = sodium.to_hex(sodium.randombytes_buf(32));
+
+            // --- BAŞLANGIÇ: REPLAY ATTACK İÇİN GÜVENLİ NONCE OLUŞTURMA ---
+            // Sunucunun beklediği format: 8 byte Zaman Damgası (hex) + 24 byte Rastgele Veri (hex)
+            
+            const timestampHex = Date.now().toString(16).padStart(16, '0'); 
+            const randomBytes = sodium.to_hex(sodium.randombytes_buf(24)); 
+            const nonce = timestampHex + randomBytes;
+            // --- BİTİŞ: GÜNCELLEME ---
+
             const signature = sodium.to_base64(sodium.crypto_sign_detached(sodium.from_hex(nonce), sodium.from_base64(identity.signPrivateKey)));
+
             socket = io({ auth: { publicKey: identity.signPublicKey, signature: signature, nonce: nonce } });
+            
             socket.on('connect', () => {
                 console.log("Bağlantı başarılı, kimlik doğrulandı.");
                 dom.loginOverlay.style.display = 'none';
@@ -200,26 +209,20 @@ import * as Auth from './auth.js';
 
     // 5. Uygulamayı Başlat
     dom.soundToggle.addEventListener('click', () => { isMuted = !isMuted; dom.soundToggle.textContent = isMuted ? t('sound_toggle_off') : t('sound_toggle_on'); if(!isMuted) playSound(); });
+    
     dom.form.addEventListener('submit', (e) => {
         e.preventDefault();
         if (!dom.input.value) return;
         const messageText = dom.input.value;
         dom.input.value = '';
         if (dmPartner) {
-            // ✅ SADECE ALICI İÇİN ŞİFRELENMİŞ METNİ SUNUCUYA GÖNDERİYORUZ
             UI.addChatMessage({ username: identity.username, message: messageText, timestamp: new Date(), isSelf: true, isEncrypted: true }, dom.messages, localStorage.getItem('language'));
             const payload = {
                 recipientPublicKey: dmPartner.publicKey,
                 ciphertext_for_recipient: sodium.to_base64(sodium.crypto_box_seal(messageText, sodium.from_base64(dmPartner.publicKey))),
-                // ❌ GÜVENLİK DÜZELTMESİ: ciphertext_for_sender sunucuya GİTMİYOR.
+                ciphertext_for_sender: sodium.to_base64(sodium.crypto_box_seal(messageText, sodium.from_base64(identity.publicKey))) 
             };
             socket.emit('private message', payload);
-            
-            // ⚠️ EK BİLGİ: Kendi gönderdiğin mesajları geçmişte görmek için 
-            // sunucudaki mantığın da değişmesi gerekir. Ya da bu mesajı 
-            // kendi Local Storage'ında tutmalısın. 
-            // Bu kod sadece sunucuya gereksiz veri göndermeyi durdurdu.
-            
         } else {
             UI.addChatMessage({ username: identity.username, message: messageText, timestamp: new Date(), isSelf: true, isEncrypted: false }, dom.messages, localStorage.getItem('language'));
             socket.emit('chat message', { message: messageText });
