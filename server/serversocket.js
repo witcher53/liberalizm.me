@@ -1,10 +1,8 @@
-// /serversocket.js (Düzeltilmiş ve Tam Hali)
+// /serversocket.js (Base64URL Güvenlik Düzeltmesi ile Tam Hali)
 const { RateLimiterMemory } = require('rate-limiter-flexible');
 const nacl = require('tweetnacl');
 const { createAdapter } = require('@socket.io/redis-adapter');
 
-// ✅ Not: Aşağıdaki require yolları, dosya yapına göre zaten doğru.
-// 'servercrypto.js' ve 'servermongo.js' dosyaları 'serversocket.js' ile aynı dizinde bulunuyor.
 const Crypto = require('./servercrypto.js');
 const Mongo = require('./servermongo.js');
 
@@ -35,7 +33,7 @@ function initializeSocketListeners(io, redisClient) {
     const messageLimiter = new RateLimiterMemory({ points: 5, duration: 2 });
     const privateMessageLimiter = new RateLimiterMemory({ points: 10, duration: 2 });
 
-    const NONCE_EXPIRE_SECONDS = 300; // Nonce'lar için 5 dakikalık son kullanma tarihi
+    const NONCE_EXPIRE_SECONDS = 300; 
 
     io.use(async (socket, next) => {
         try {
@@ -46,7 +44,6 @@ function initializeSocketListeners(io, redisClient) {
                 return next(new Error('Kimlik doğrulama hatası: Bilgiler eksik.'));
             }
 
-            // --- REPLAY ATTACK KORUMASI ---
             const nonceKey = `nonce:${nonce}`;
             const nonceUsed = await redisClient.get(nonceKey);
             if (nonceUsed) {
@@ -159,7 +156,6 @@ function initializeSocketListeners(io, redisClient) {
                     timestamp: new Date() 
                 };
                 
-                // client.js'den ciphertext_for_sender geliyorsa onu da kaydet
                 if(data.ciphertext_for_sender) {
                     dbData.ciphertext_for_sender = data.ciphertext_for_sender;
                 }
@@ -181,11 +177,26 @@ function initializeSocketListeners(io, redisClient) {
         socket.on('get conversation history', async (otherUserPublicKey) => {
             if (!socket.publicKey) return;
             let history;
+
             if (otherUserPublicKey === null) {
                 history = await generalMessagesCollection.find({}).sort({ _id: -1 }).limit(100).toArray();
             } else {
+                const expectedKeyLength = 43;
+                // Base64URL karakter setini (_ ve - dahil) kontrol eden bir regex.
+                const base64UrlRegex = /^[A-Za-z0-9\-_]+$/;
+
+                if (
+                    typeof otherUserPublicKey !== 'string' ||
+                    otherUserPublicKey.length !== expectedKeyLength ||
+                    !base64UrlRegex.test(otherUserPublicKey)
+                ) {
+                    console.warn(`[GÜVENLİK] Geçersiz publicKey formatı ile sorgu denendi. Kullanıcı: ${socket.username}, Gelen Veri: ${otherUserPublicKey}`);
+                    return; // Hatalı formatta ise işlemi anında durdur.
+                }
+
                 const myFingerprint = Crypto.pointerFingerprint(socket.publicKey);
                 const otherFingerprint = Crypto.pointerFingerprint(otherUserPublicKey);
+                
                 history = await dmMessagesCollection.find({ 
                     $or: [
                         { senderFingerprint: myFingerprint, recipientFingerprint: otherFingerprint }, 

@@ -20,7 +20,7 @@ import * as Auth from './auth.js';
     }
     await sodium.ready;
 
-    // 2. DOM Elementlerini ve Uygulama Durumunu Tanımla
+    // 2. DOM Elementleri
     const dom = {
         messages: document.getElementById('messages'),
         form: document.getElementById('form'),
@@ -43,22 +43,45 @@ import * as Auth from './auth.js';
     let dmPartner = null;
     let onlineUserMap = new Map();
     
-    // 3. Ana Kontrol Fonksiyonları ve Yardımcılar
+    // 3. Ana Kontrol Fonksiyonları
     function playSound() { if (isMuted) return; new Audio('/notification.mp3').play().catch(() => {}); }
 
+    // --- BAŞLANGIÇ: ARAYÜZ TAKILMA HATASI DÜZELTMESİ ---
     function activateChat(partner, title) {
-        if (partner && partner.publicKey) {
-            const userElement = document.querySelector(`p[data-public-key="${partner.publicKey}"]`);
-            if (userElement) userElement.classList.remove('new-message-indicator');
+        // 1. Önceki aktif sohbetin işaretini kaldır
+        const currentActive = dom.conversationsDiv.querySelector('.active-chat');
+        if (currentActive) {
+            currentActive.classList.remove('active-chat');
         }
+
+        // 2. Yeni tıklanan sohbeti aktif olarak işaretle
+        if (partner && partner.publicKey) {
+            // DM sohbetini aktif yap
+            const userElement = dom.conversationsDiv.querySelector(`p[data-public-key="${partner.publicKey}"]`);
+            if (userElement) {
+                userElement.classList.add('active-chat');
+                userElement.classList.remove('new-message-indicator');
+            }
+        } else {
+            // Genel sohbeti aktif yap
+            const generalChatElement = dom.conversationsDiv.querySelector('p:first-child');
+            if (generalChatElement) {
+                generalChatElement.classList.add('active-chat');
+            }
+        }
+        
+        // 3. Sohbet durumunu ve başlığını güncelle
         dmPartner = partner;
         dom.chatTitle.textContent = title;
         dom.input.placeholder = t('placeholder_write_message');
         dom.input.disabled = false;
         dom.button.disabled = false;
+        
+        // 4. Sunucudan sohbet geçmişini iste
         const historyTarget = partner ? partner.publicKey : null;
         socket.emit('get conversation history', historyTarget);
     }
+    // --- BİTİŞ: DÜZELTME ---
     
     function renderOnlineUserList() {
         dom.onlineUsersDiv.innerHTML = '';
@@ -72,7 +95,7 @@ import * as Auth from './auth.js';
         });
     }
 
-    // 4. Socket.IO ve Olay Dinleyicileri Kurulumu
+    // 4. Socket.IO Olay Dinleyicileri
     function setupSocketListeners() {
         socket.on('initial user list', (users) => { onlineUserMap.clear(); if (users) { users.forEach(user => { onlineUserMap.set(user.publicKey, user); }); } renderOnlineUserList(); });
         socket.on('user connected', (user) => { onlineUserMap.set(user.publicKey, user); renderOnlineUserList(); UI.updateConversationOnlineStatus(user.publicKey, true, dom.conversationsDiv); });
@@ -81,7 +104,6 @@ import * as Auth from './auth.js';
             dom.conversationsDiv.innerHTML = '';
             const generalChat = document.createElement('p');
             generalChat.innerHTML = `<strong>${t('general_chat_title')}</strong>`;
-            generalChat.classList.add('active-chat');
             generalChat.style.cursor = 'pointer';
             generalChat.onclick = () => activateChat(null, t('general_chat_title'));
             dom.conversationsDiv.appendChild(generalChat);
@@ -90,6 +112,8 @@ import * as Auth from './auth.js';
                     UI.renderUser(user, dom.conversationsDiv, { identity, t, onUserClick: activateChat, isOnline: onlineUserMap.has(user.publicKey) });
                 });
             }
+            // Sayfa yüklendiğinde Genel Sohbeti aktif yap
+            activateChat(null, t('general_chat_title'));
         });
         
         socket.on('conversation history', (data) => {
@@ -97,65 +121,45 @@ import * as Auth from './auth.js';
             if (!data || !data.history) return;
             const recipientPKBuffer = sodium.from_base64(identity.publicKey);
             const privateKeyBuffer = sodium.from_base64(identity.privateKey);
-
             data.history.forEach(msg => {
                 if (!data.partnerPublicKey) {
                     UI.addChatMessage({ ...msg, isSelf: msg.username === identity.username }, dom.messages, localStorage.getItem('language'));
                     return;
                 }
-
                 let isSelf = false;
                 let ciphertextToDecrypt = null;
-
                 if (msg.ciphertext_for_sender) {
                     try {
                         sodium.crypto_box_seal_open(sodium.from_base64(msg.ciphertext_for_sender), recipientPKBuffer, privateKeyBuffer);
                         ciphertextToDecrypt = msg.ciphertext_for_sender;
                         isSelf = true;
-                    } catch (e) {
-                    }
+                    } catch (e) {}
                 }
-                
                 if (!ciphertextToDecrypt && msg.ciphertext_for_recipient) {
                     try {
                         sodium.crypto_box_seal_open(sodium.from_base64(msg.ciphertext_for_recipient), recipientPKBuffer, privateKeyBuffer);
                         ciphertextToDecrypt = msg.ciphertext_for_recipient;
                         isSelf = false;
-                    } catch (e) {
-                    }
+                    } catch (e) {}
                 }
-
                 if (ciphertextToDecrypt) {
                     try {
                         const decryptedMessage = sodium.to_string(sodium.crypto_box_seal_open(sodium.from_base64(ciphertextToDecrypt), recipientPKBuffer, privateKeyBuffer));
-                        const senderUsername = isSelf
-                            ? identity.username
-                            : (dmPartner?.username || onlineUserMap.get(data.partnerPublicKey)?.username || 'Bilinmeyen');
+                        const senderUsername = isSelf ? identity.username : (dmPartner?.username || onlineUserMap.get(data.partnerPublicKey)?.username || 'Bilinmeyen');
                         UI.addChatMessage({ username: senderUsername, message: decryptedMessage, timestamp: msg.timestamp, isSelf: isSelf, isEncrypted: true }, dom.messages, localStorage.getItem('language'));
-                    } catch (e) {
-                        UI.addLog(t('log_undecryptable_message'), dom.messages, t);
-                    }
-                } else {
-                    UI.addLog(t('log_undecryptable_message'), dom.messages, t);
-                }
+                    } catch (e) { UI.addLog(t('log_undecryptable_message'), dom.messages, t); }
+                } else { UI.addLog(t('log_undecryptable_message'), dom.messages, t); }
             });
         });
-
         socket.on('private message', (data) => {
              const isFromCurrentPartner = dmPartner && data.senderPublicKey === dmPartner.publicKey;
              if(isFromCurrentPartner) {
                 try {
-                    const decrypted = sodium.to_string(sodium.crypto_box_seal_open(
-                        sodium.from_base64(data.ciphertext), 
-                        sodium.from_base64(identity.publicKey), 
-                        sodium.from_base64(identity.privateKey)
-                    ));
+                    const decrypted = sodium.to_string(sodium.crypto_box_seal_open(sodium.from_base64(data.ciphertext), sodium.from_base64(identity.publicKey), sodium.from_base64(identity.privateKey)));
                     const senderUsername = onlineUserMap.get(data.senderPublicKey)?.username || 'Bilinmeyen';
                     playSound();
                     UI.addChatMessage({ username: senderUsername, message: decrypted, timestamp: new Date(), isSelf: false, isEncrypted: true }, dom.messages, localStorage.getItem('language'));
-                } catch (e) {
-                     UI.addLog(t('log_undecryptable_message'), dom.messages, t);
-                }
+                } catch (e) { UI.addLog(t('log_undecryptable_message'), dom.messages, t); }
              } else {
                  const userElement = document.querySelector(`p[data-public-key="${data.senderPublicKey}"]`);
                  if (userElement) { userElement.classList.add('new-message-indicator'); playSound(); }
@@ -172,21 +176,13 @@ import * as Auth from './auth.js';
     }
 
     async function startChat(id) {
-        identity = id; 
+        identity = id;
         return new Promise((resolve, reject) => {
-
-            // --- BAŞLANGIÇ: REPLAY ATTACK İÇİN GÜVENLİ NONCE OLUŞTURMA ---
-            // Sunucunun beklediği format: 8 byte Zaman Damgası (hex) + 24 byte Rastgele Veri (hex)
-            
-            const timestampHex = Date.now().toString(16).padStart(16, '0'); 
-            const randomBytes = sodium.to_hex(sodium.randombytes_buf(24)); 
+            const timestampHex = Date.now().toString(16).padStart(16, '0');
+            const randomBytes = sodium.to_hex(sodium.randombytes_buf(24));
             const nonce = timestampHex + randomBytes;
-            // --- BİTİŞ: GÜNCELLEME ---
-
             const signature = sodium.to_base64(sodium.crypto_sign_detached(sodium.from_hex(nonce), sodium.from_base64(identity.signPrivateKey)));
-
             socket = io({ auth: { publicKey: identity.signPublicKey, signature: signature, nonce: nonce } });
-            
             socket.on('connect', () => {
                 console.log("Bağlantı başarılı, kimlik doğrulandı.");
                 dom.loginOverlay.style.display = 'none';
@@ -194,7 +190,6 @@ import * as Auth from './auth.js';
                 dom.form.style.display = 'flex';
                 socket.emit('user authenticated', { username: identity.username, boxPublicKey: identity.publicKey });
                 socket.emit('get conversations');
-                activateChat(null, t('general_chat_title'));
                 setupSocketListeners();
                 resolve();
             });
@@ -209,7 +204,6 @@ import * as Auth from './auth.js';
 
     // 5. Uygulamayı Başlat
     dom.soundToggle.addEventListener('click', () => { isMuted = !isMuted; dom.soundToggle.textContent = isMuted ? t('sound_toggle_off') : t('sound_toggle_on'); if(!isMuted) playSound(); });
-    
     dom.form.addEventListener('submit', (e) => {
         e.preventDefault();
         if (!dom.input.value) return;
