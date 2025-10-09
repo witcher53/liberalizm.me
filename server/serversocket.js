@@ -76,7 +76,7 @@ function initializeSocketListeners(io, redisClient) {
                 socket.username = userData.username;
                 socket.publicKey = userData.boxPublicKey;
                 socket.isAuthenticated = true;
-                console.log(`[Kimlik Doğrulama] Başarılı: ${socket.username} (${socket.id})`);
+                console.log(`[Kimlik Doğrulama] Başılı: ${socket.username} (${socket.id})`);
                 socket.join(socket.publicKey);
                 socket.join(GENERAL_CHAT_ROOM);
                 await usersCollection.updateOne({ publicKey: socket.publicKey }, { $set: { username: userData.username } }, { upsert: true });
@@ -117,6 +117,7 @@ function initializeSocketListeners(io, redisClient) {
             }
         });
 
+        // --- BAŞLANGIÇ: GÜNCELLENMİŞ 'chat message' FONKSİYONU ---
         socket.on('chat message', async (msg, callback) => {
             if (!socket.isAuthenticated) return;
             try {
@@ -129,21 +130,30 @@ function initializeSocketListeners(io, redisClient) {
                 }
                 const expireDate = new Date(Date.now() + 86400 * 1000);
                 
-                const data = { 
+                // Veritabanına kaydedilecek veri (publicKey şifreli)
+                const dbData = { 
                     username: socket.username, 
                     message: message, 
                     timestamp: new Date(), 
                     expireAt: expireDate,
-                    publicKey: socket.publicKey
+                    senderPointer: Crypto.encryptPointer(socket.publicKey) // publicKey yerine şifreli pointer
                 };
+                await generalMessagesCollection.insertOne(dbData);
 
-                await generalMessagesCollection.insertOne(data);
-                socket.broadcast.to(GENERAL_CHAT_ROOM).emit('chat message', data);
+                // İstemcilere anlık gönderilecek veri (publicKey açık)
+                const broadcastData = {
+                    ...dbData,
+                    publicKey: socket.publicKey // Tıklama özelliği için publicKey'i ekle
+                };
+                delete broadcastData.senderPointer; // Gereksiz alanı kaldır
+
+                socket.broadcast.to(GENERAL_CHAT_ROOM).emit('chat message', broadcastData);
                 if (typeof callback === 'function') callback({ status: 'ok' });
             } catch (rejRes) {
                 if (typeof callback === 'function') callback({ status: 'error', message: 'Çok hızlı mesaj gönderiyorsun.' });
             }
         });
+        // --- BİTİŞ: GÜNCELLENMİŞ 'chat message' FONKSİYONU ---
 
         socket.on('private message', async (data) => {
             if (!socket.isAuthenticated) return;
@@ -179,14 +189,24 @@ function initializeSocketListeners(io, redisClient) {
                 }
             }
         });
-
+        
+        // --- BAŞLANGIÇ: GÜNCELLENMİŞ 'get conversation history' FONKSİYONU ---
         socket.on('get conversation history', async (otherUserPublicKey) => {
             if (!socket.isAuthenticated) return;
             try {
                 let history;
                 if (otherUserPublicKey === null) {
+                    // Genel sohbet geçmişi
                     history = await generalMessagesCollection.find({}).sort({ _id: -1 }).limit(100).toArray();
+                    // Her mesaj için şifreli pointer'ı çözüp publicKey'e dönüştür
+                    history.forEach(msg => {
+                        if (msg.senderPointer) {
+                            msg.publicKey = Crypto.decryptPointer(msg.senderPointer);
+                            delete msg.senderPointer; // Alanı temizle
+                        }
+                    });
                 } else {
+                    // DM geçmişi
                     const expectedKeyLength = 43;
                     const base64UrlRegex = /^[A-Za-z0-9\-_]+$/;
                     if (typeof otherUserPublicKey !== 'string' || otherUserPublicKey.length !== expectedKeyLength || !base64UrlRegex.test(otherUserPublicKey)) {
@@ -208,14 +228,12 @@ function initializeSocketListeners(io, redisClient) {
                  console.error(`[HATA] 'get conversation history': ${err.message}`, err);
             }
         });
+        // --- BİTİŞ: GÜNCELLENMİŞ 'get conversation history' FONKSİYONU ---
 
-        // --- BAŞLANGIÇ: GÜNCELLENMİŞ HEARTBEAT TTL ---
         socket.on('heartbeat', async () => {
             if (!socket.isAuthenticated) return;
-            // TTL 45 saniyeye güncellendi (20 saniyelik client interval'i için güvenli pay)
             if (socket.publicKey) await redisClient.setEx(`user:${socket.publicKey}:heartbeat`, 45, '1');
         });
-        // --- BİTİŞ: GÜNCELLENMİŞ HEARTBEAT TTL ---
 
         socket.on('disconnect', async () => {
             console.log(`[Bağlantı Kesildi] ${socket.username || socket.id}`);
@@ -228,8 +246,7 @@ function initializeSocketListeners(io, redisClient) {
         });
     });
 
-    // --- BAŞLANGIÇ: GÜNCELLENMİŞ TEMİZLİK ARALIĞI ---
-    const CLEANUP_INTERVAL = 15000; // 15 saniyeye düşürüldü
+    const CLEANUP_INTERVAL = 15000;
     setInterval(async () => {
         try {
             const onlineKeys = await redisClient.sMembers('online_users_set');
@@ -245,7 +262,6 @@ function initializeSocketListeners(io, redisClient) {
             console.error('[Temizlik] Hata:', error);
         }
     }, CLEANUP_INTERVAL);
-    // --- BİTİŞ: GÜNCELLENMİŞ TEMİZLİK ARALIĞI ---
 }
 
 module.exports = {
