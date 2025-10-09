@@ -4,7 +4,7 @@
     <title data-i18n="page_title">Mesajlasma</title>
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta charset="UTF-8">
-    <link rel="stylesheet" href="/style.css?v=3">
+    <link rel="stylesheet" href="/style.css?v=5"> 
     <style>
         #lang-switcher { position: absolute; top: 10px; right: 150px; z-index: 300; }
         #lang-switcher button { background: #444; border: 1px solid #666; color: white; padding: 5px 8px; cursor: pointer; border-radius: 3px; }
@@ -15,13 +15,18 @@
 <body>
     <div id="login-overlay">
         <div id="login-box">
-            <h1 data-i18n="login_title">Anonim Sohbet Girişi</h1>
-            <p style="font-size: 0.85rem; color: #aaa; margin: 1.5rem 0;" data-i18n="login_disclaimer">
-                Önemli: Devam ederek...
-            </p>
+            <h1 data-i18n="login_title">Kimliğini Doğrula</h1>
+            <p style="font-size: 0.85rem; color: #aaa;" data-i18n="login_disclaimer"></p>
+            <p class="recommendation" data-i18n="login_recommendation"></p>
+            
             <input type="text" id="name-input" data-i18n-placeholder="username_placeholder" maxlength="15">
-            <input type="password" id="password-input" data-i18n-placeholder="password_placeholder" style="margin: 10px 0;">
-            <button id="submit-name" data-i18n="login_button">Giriş Yap</button>
+            <input type="password" id="password-input" data-i18n-placeholder="password_placeholder" style="width: 80%; padding: 0.8rem; margin: 1rem 0; border: 1px solid #666; background: #444; color: white; border-radius: 5px; font-size: 1rem; box-sizing: border-box;">
+            <button id="submit-name" data-i18n="login_button"></button>
+            <div class="identity-actions">
+                <button type="button" id="export-identity" data-i18n="export_identity_button"></button>
+                <label for="import-identity-input" class="import-label" data-i18n="import_identity_label"></label>
+                <input type="file" id="import-identity-input" accept=".json" style="display: none;">
+            </div>
         </div>
     </div>
     <div id="main-container" style="display: none;">
@@ -34,21 +39,23 @@
         </div>
         <div id="app-container">
             <div id="header">
-                <h1 id="chat-title" data-i18n="chat_title_default">Sohbet Seç</h1>
+                <h1 id="chat-title" data-i18n="chat_title_default"></h1>
+                
                 <div id="lang-switcher">
                     <button id="lang-tr">TR</button>
                     <button id="lang-en">EN</button>
                 </div>
-                <button id="sound-toggle" data-i18n="sound_toggle_off">🔇 Ses Kapalı</button>
+                
+                <button id="sound-toggle" data-i18n="sound_toggle_off"></button>
             </div>
             <ul id="messages"></ul>
             <form id="form" action="">
-                <input id="input" autocomplete="off" data-i18n-placeholder="input_placeholder_default" disabled /><button disabled data-i18n="send_button">Gönder</button>
+                <input id="input" autocomplete="off" data-i18n-placeholder="input_placeholder_default" disabled /><button disabled data-i18n="send_button"></button>
             </form>
         </div>
     </div>
     <script src="/sodium.js"></script>
     <script src="/socket.io/socket.io.js"></script>
-   <script type="module" src="/client.js?v=55"></script>
+   <script type="module" src="/client.js?v=72"></script>
 </body>
 </html>

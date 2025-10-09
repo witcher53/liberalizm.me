@@ -1,4 +1,4 @@
-// /public/auth.js (HESAP SİLME KORUMALI NİHAİ VERSİYON)
+// /public/auth.js (FİNAL, HATASIZ SÜRÜM)
 let identity = null;
 let dom, callbacks, crypto, utils;
 
@@ -18,67 +18,65 @@ function saveIdentity(id) {
     localStorage.setItem('chatIdentity', JSON.stringify(storedId));
 }
 
-export async function checkIdentity() {
+export function checkIdentity() {
     const storedIdentity = localStorage.getItem('chatIdentity');
     if (!storedIdentity) {
         dom.loginOverlay.style.display = 'flex';
-        return;
+        dom.submitNameBtn.textContent = utils.t('login_button');
+        return null;
     }
-
-    let tempIdentity;
     try {
-        tempIdentity = JSON.parse(storedIdentity);
+        const tempIdentity = JSON.parse(storedIdentity);
         if (!tempIdentity.salt || !tempIdentity.encryptedSignPrivateKey || !tempIdentity.signPublicKey) {
-            console.warn("Bozuk kimlik formatı algılandı. Kimlik SİLİNMEDİ.");
+            console.warn("Bozuk kimlik formatı algılandı.");
             alert(utils.t('alert_corrupt_identity'));
-            return;
+            return null;
         }
+        dom.loginOverlay.style.display = 'flex';
+        dom.nameInput.value = tempIdentity.username;
+        dom.nameInput.disabled = true;
+        dom.submitNameBtn.textContent = utils.t('decrypt_button');
+        dom.passwordInput.focus();
+        return tempIdentity;
     } catch (e) {
-        console.error("Kimlik parse edilemedi. Kimlik SİLİNMEDİ:", e);
+        console.error("Kimlik parse edilemedi:", e);
         alert(utils.t('alert_corrupt_identity'));
-        return;
+        return null;
     }
+}
 
-    dom.loginOverlay.style.display = 'flex';
-    dom.passwordInput.style.display = 'block';
-    dom.nameInput.value = tempIdentity.username;
-    dom.nameInput.disabled = true;
-    dom.submitNameBtn.textContent = utils.t('decrypt_button');
-    dom.passwordInput.focus();
-
-    dom.submitNameBtn.onclick = async () => {
-        const userPassword = dom.passwordInput.value.trim();
-        if (!userPassword || userPassword.length < 8) { alert(utils.t('alert_password_required')); return; }
-
-        try {
-            const salt = sodium.from_base64(tempIdentity.salt);
-            const privateKeyBase64 = await crypto.decryptKey(tempIdentity.privateKey, userPassword, salt);
-            const signPrivateKeyBase64 = await crypto.decryptKey(tempIdentity.encryptedSignPrivateKey, userPassword, salt);
-            const fpeKeyB = await crypto.decryptKey(tempIdentity.encryptedFPEKeyB, userPassword, salt);
-
-            identity = {
-                username: tempIdentity.username, publicKey: tempIdentity.publicKey, privateKey: privateKeyBase64,
-                signPublicKey: tempIdentity.signPublicKey, signPrivateKey: signPrivateKeyBase64, fpeKeyB: fpeKeyB,
-                salt: tempIdentity.salt, encryptedPrivateKey: tempIdentity.privateKey,
-                encryptedSignPrivateKey: tempIdentity.encryptedSignPrivateKey, encryptedFPEKeyB: tempIdentity.encryptedFPEKeyB
-            };
-
-            dom.nameInput.disabled = false;
-            dom.submitNameBtn.textContent = utils.t('login_button');
-            await callbacks.startChat(identity);
-        } catch (e) {
-            alert(utils.t('alert_wrong_password'));
-            console.error("Giriş sırasında hata:", e);
-        }
-    };
+export async function loginWithPassword(tempIdentity) {
+    const userPassword = dom.passwordInput.value.trim();
+    if (!userPassword) { 
+        alert(utils.t('alert_password_required')); 
+        return; 
+    }
+    try {
+        const salt = sodium.from_base64(tempIdentity.salt);
+        const privateKeyBase64 = await crypto.decryptKey(tempIdentity.privateKey, userPassword, salt);
+        const signPrivateKeyBase64 = await crypto.decryptKey(tempIdentity.encryptedSignPrivateKey, userPassword, salt);
+        const fpeKeyB = await crypto.decryptKey(tempIdentity.encryptedFPEKeyB, userPassword, salt);
+        const fullIdentity = {
+            username: tempIdentity.username, publicKey: tempIdentity.publicKey, privateKey: privateKeyBase64,
+            signPublicKey: tempIdentity.signPublicKey, signPrivateKey: signPrivateKeyBase64, fpeKeyB: fpeKeyB,
+            salt: tempIdentity.salt, encryptedPrivateKey: tempIdentity.privateKey,
+            encryptedSignPrivateKey: tempIdentity.encryptedSignPrivateKey, encryptedFPEKeyB: tempIdentity.encryptedFPEKeyB
+        };
+        await callbacks.startChat(fullIdentity);
+    } catch (e) {
+        console.error("Giriş sırasında hata:", e);
+        alert(utils.t('alert_wrong_password'));
+    }
 }
 
 export async function createIdentity() {
     try {
         const username = dom.nameInput.value.trim() || 'Anonim';
         const userPassword = dom.passwordInput.value.trim();
-        if (userPassword.length < 8) { alert(utils.t('alert_password_required')); return; }
-
+        if (userPassword.length < 8) { 
+            alert(utils.t('alert_password_required')); 
+            return; 
+        }
         const signKeyPair = sodium.crypto_sign_keypair();
         const boxPublicKey = sodium.crypto_sign_ed25519_pk_to_curve25519(signKeyPair.publicKey);
         const boxPrivateKey = sodium.crypto_sign_ed25519_sk_to_curve25519(signKeyPair.privateKey);
@@ -88,10 +86,12 @@ export async function createIdentity() {
         const encryptedPrivateKey = await crypto.encryptKey(sodium.to_base64(boxPrivateKey), userPassword, salt);
         const encryptedSignPrivateKey = await crypto.encryptKey(sodium.to_base64(signKeyPair.privateKey), userPassword, salt);
         const encryptedFPEKeyB = await crypto.encryptKey(fpeKeyB, userPassword, salt);
-
         identity = {
-            username: username, publicKey: sodium.to_base64(boxPublicKey), privateKey: sodium.to_base64(boxPrivateKey),
-            signPublicKey: sodium.to_base64(signKeyPair.publicKey), signPrivateKey: sodium.to_base64(signKeyPair.privateKey),
+            username: username, 
+            publicKey: sodium.to_base64(boxPublicKey), 
+            privateKey: sodium.to_base64(boxPrivateKey),
+            signPublicKey: sodium.to_base64(signKeyPair.publicKey), 
+            signPrivateKey: sodium.to_base64(signKeyPair.privateKey),
             encryptedPrivateKey, encryptedSignPrivateKey, fpeKeyB, encryptedFPEKeyB, salt: saltBase64
         };
         saveIdentity(identity);

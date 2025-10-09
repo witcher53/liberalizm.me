@@ -1,5 +1,4 @@
-// Bu dosya, tüm istemci taraflı şifreleme mantığını içerir.
-
+// /public/crypto.js (FİNAL, HATASIZ SÜRÜM)
 export async function deriveKey(password, salt) {
     if (password.length < 8) throw new Error('En az 8 karakterli bir şifre gerekli.');
     if (sodium && typeof sodium.crypto_pwhash === 'function') {
@@ -24,7 +23,6 @@ export async function decryptKey(encryptedString, password, salt) {
     const derivedKey = await deriveKey(password, salt);
     const parts = (typeof encryptedString === 'string' ? encryptedString : '').split('::');
     if (parts.length !== 2) throw new Error("Anahtar formatı bozuk.");
-
     try {
         const nonceBytes = sodium.from_base64(parts[0]);
         const encryptedBytes = sodium.from_base64(parts[1]);

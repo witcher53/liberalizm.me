@@ -1,56 +1,55 @@
-// /public/client.js (Tüm Düzeltmeleri İçeren Son Stabil Hali)
+// /public/client.js (DÜZELTİLMİŞ VE EKSİKSİZ SÜRÜM)
 import * as Crypto from './crypto.js';
 import * as UI from './ui.js';
-import * as Auth from './auth.js';
-
-// --- ANA KONTROL FONKSİYONU ---
-// Bu fonksiyon, tüm HTML sayfası tamamen yüklendikten sonra çalışır,
-// böylece tüm elementlerin yerli yerinde olduğundan emin oluruz.
+ import * as Auth from './auth.js';
 function init() {
     (async () => {
-        // 1. Dil Ayarları
         let translations = {};
         async function setLanguage(lang) {
             try {
                 const response = await fetch(`/locales/${lang}.json`);
                 translations = await response.json();
-                document.querySelectorAll('[data-i18n]').forEach(el => {
-                    const key = el.getAttribute('data-i18n');
-                    if (translations[key]) el.innerHTML = translations[key];
-                });
-                document.querySelectorAll('[data-i18n-placeholder]').forEach(el => {
-                    const key = el.getAttribute('data-i18n-placeholder');
-                    if (translations[key]) el.setAttribute('placeholder', translations[key]);
-                });
-                document.title = translations['page_title'] || 'Chat';
-                localStorage.setItem('language', lang);
-                document.getElementById('lang-tr').classList.toggle('active', lang === 'tr');
-                document.getElementById('lang-en').classList.toggle('active', lang === 'en');
             } catch (error) {
-                console.error(`Could not load language: ${lang}`, error);
+                console.error(`Could not load language file: ${lang}`, error);
+                translations = {};
             }
+            document.querySelectorAll('[data-i18n]').forEach(el => {
+                const key = el.getAttribute('data-i18n');
+                if (translations[key]) {
+                    if (el.tagName === 'BUTTON' || el.tagName === 'LABEL') {
+                        el.textContent = translations[key];
+                    } else {
+                        el.innerHTML = translations[key];
+                    }
+                }
+            });
+            document.querySelectorAll('[data-i18n-placeholder]').forEach(el => {
+                const key = el.getAttribute('data-i18n-placeholder');
+                if (translations[key]) el.setAttribute('placeholder', translations[key]);
+            });
+            document.title = translations['page_title'] || 'Chat';
+            localStorage.setItem('language', lang);
+            document.getElementById('lang-tr').classList.toggle('active', lang === 'tr');
+            document.getElementById('lang-en').classList.toggle('active', lang === 'en');
         }
         function t(key) { return translations[key] || key; }
-
         const preferredLang = localStorage.getItem('language') || (navigator.language.startsWith('tr') ? 'tr' : 'en');
         await setLanguage(preferredLang);
-        
         document.getElementById('lang-en').addEventListener('click', () => setLanguage('en'));
         document.getElementById('lang-tr').addEventListener('click', () => setLanguage('tr'));
-        
-        if (typeof sodium === 'undefined' || typeof io === 'undefined' || typeof DOMPurify === 'undefined') { 
-            document.body.innerHTML = `<h1>${t('error_libsodium')}</h1>`; 
-            return; 
+        if (typeof sodium === 'undefined' || typeof io === 'undefined' || typeof DOMPurify === 'undefined') {
+            document.body.innerHTML = `<h1>${t('error_libsodium')}</h1>`;
+            return;
         }
         await sodium.ready;
 
-        // 2. DOM Elementleri (Artık %100 yüklendiğinden eminiz)
         const dom = {
             messages: document.getElementById('messages'),
             form: document.getElementById('form'),
             input: document.getElementById('input'),
             button: document.querySelector('#form button'),
             loginOverlay: document.getElementById('login-overlay'),
+            loginBox: document.getElementById('login-box'),
             nameInput: document.getElementById('name-input'),
             passwordInput: document.getElementById('password-input'),
             submitNameBtn: document.getElementById('submit-name'),
@@ -59,22 +58,21 @@ function init() {
             conversationsDiv: document.getElementById('conversations'),
             onlineUsersDiv: document.getElementById('online-users'),
             chatTitle: document.getElementById('chat-title'),
+            exportIdentityBtn: document.getElementById('export-identity'),
+            importIdentityInput: document.getElementById('import-identity-input'),
         };
 
-        // 3. Uygulama Değişkenleri
         let socket = null;
         let identity = null;
         let isMuted = true;
         let dmPartner = null;
         let onlineUserMap = new Map();
-        
-        // 4. Yardımcı Fonksiyonlar
+
         function playSound() { if (isMuted) return; new Audio('/notification.mp3').play().catch(() => {}); }
 
         function activateChat(partner, title) {
             const currentActive = dom.conversationsDiv.querySelector('.active-chat');
             if (currentActive) currentActive.classList.remove('active-chat');
-            
             if (partner && partner.publicKey) {
                 const userElement = dom.conversationsDiv.querySelector(`p[data-public-key="${partner.publicKey}"]`);
                 if (userElement) {
@@ -85,7 +83,6 @@ function init() {
                 const generalChatElement = dom.conversationsDiv.querySelector('p:first-child');
                 if (generalChatElement) generalChatElement.classList.add('active-chat');
             }
-            
             dmPartner = partner;
             dom.chatTitle.textContent = title;
             dom.input.placeholder = t('placeholder_write_message');
@@ -94,7 +91,7 @@ function init() {
             const historyTarget = partner ? partner.publicKey : null;
             socket.emit('get conversation history', historyTarget);
         }
-        
+
         function renderOnlineUserList() {
             dom.onlineUsersDiv.innerHTML = '';
             const sortedUsers = Array.from(onlineUserMap.values()).sort((a, b) => {
@@ -105,7 +102,6 @@ function init() {
             sortedUsers.forEach(user => UI.renderUser(user, dom.onlineUsersDiv, { identity, t, onUserClick: activateChat, isOnline: true }));
         }
 
-        // 5. Socket.IO Olay Dinleyicileri
         function setupSocketListeners() {
             socket.on('initial user list', (users) => { onlineUserMap.clear(); if (users) { users.forEach(user => onlineUserMap.set(user.publicKey, user)); } renderOnlineUserList(); });
             socket.on('user connected', (user) => { onlineUserMap.set(user.publicKey, user); renderOnlineUserList(); UI.updateConversationOnlineStatus(user.publicKey, true, dom.conversationsDiv); });
@@ -141,7 +137,6 @@ function init() {
             socket.on('new_conversation_partner', (partner) => { if (!dom.conversationsDiv.querySelector(`p[data-public-key="${partner.publicKey}"]`) && partner) { UI.renderUser(partner, dom.conversationsDiv, { identity, t, onUserClick: activateChat, isOnline: onlineUserMap.has(partner.publicKey) }); UI.updateConversationOnlineStatus(partner.publicKey, onlineUserMap.has(partner.publicKey), dom.conversationsDiv); } });
         }
 
-        // 6. Sohbet Başlatma
         async function startChat(id) {
             identity = id;
             return new Promise((resolve, reject) => {
@@ -171,8 +166,69 @@ function init() {
             });
         }
 
-        // 7. Olay Dinleyicilerini Ayarla ve Uygulamayı Başlat
-        dom.soundToggle.addEventListener('click', () => { isMuted = !isMuted; dom.soundToggle.textContent = isMuted ? t('sound_toggle_off') : t('sound_toggle_on'); if(!isMuted) playSound(); });
+        function exportIdentity() {
+            const identityString = localStorage.getItem('chatIdentity');
+            if (!identityString) {
+                alert(t('alert_no_identity_to_export') || "Dışa aktarılacak kimlik bulunamadı.");
+                return;
+            }
+            try {
+                const identityData = JSON.parse(identityString);
+                const blob = new Blob([identityString], { type: 'application/json' });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = `kimlik_${identityData.username || 'anonim'}.json`;
+                dom.loginBox.appendChild(a);
+                a.click();
+                dom.loginBox.removeChild(a);
+                URL.revokeObjectURL(url);
+            } catch (e) {
+                alert(t('alert_export_failed') || "Kimlik dışa aktarılamadı.");
+                console.error("Kimlik dışa aktarılamadı:", e);
+            }
+        }
+
+        function importIdentity(event) {
+            const file = event.target.files[0];
+            if (!file) return;
+            const reader = new FileReader();
+            reader.onload = (e) => {
+                try {
+                    const content = e.target.result;
+                    const identityData = JSON.parse(content);
+                    if (identityData.publicKey && identityData.salt && identityData.encryptedSignPrivateKey) {
+                        localStorage.setItem('chatIdentity', content);
+                        alert(t('alert_import_success') || "Kimlik başarıyla içe aktarıldı. Sayfa yenileniyor.");
+                        location.reload();
+                    } else {
+                        throw new Error("Geçersiz kimlik dosyası formatı.");
+                    }
+                } catch (err) {
+                    alert(t('alert_import_failed') || "Kimlik içe aktarılamadı.");
+                    console.error("Kimlik içe aktarılamadı:", err);
+                }
+            };
+            reader.readAsText(file);
+            event.target.value = '';
+        }
+
+        let existingIdentity = null;
+
+        dom.soundToggle.addEventListener('click', () => {
+            isMuted = !isMuted;
+            dom.soundToggle.textContent = isMuted ? t('sound_toggle_off') : t('sound_toggle_on');
+            if(!isMuted) playSound();
+        });
+
+const handleLoginSubmit = () => {
+    if (existingIdentity) {
+        Auth.loginWithPassword(existingIdentity); // Auth. eklendi
+    } else {
+        Auth.createIdentity(); // Auth. eklendi
+    }
+};
+
         dom.form.addEventListener('submit', (e) => {
             e.preventDefault();
             if (!dom.input.value) return;
@@ -194,16 +250,24 @@ function init() {
             crypto: { encryptKey: Crypto.encryptKey, decryptKey: Crypto.decryptKey },
             utils: { t }
         });
-        
-        dom.submitNameBtn.addEventListener('click', () => { if (dom.nameInput.disabled) { dom.submitNameBtn.onclick(); } else { Auth.createIdentity(); } });
-        dom.nameInput.addEventListener('keypress', (e) => { if (e.key === 'Enter' && !dom.nameInput.disabled) Auth.createIdentity(); });
-        dom.passwordInput.addEventListener('keypress', (e) => { if (e.key === 'Enter' && dom.nameInput.disabled) dom.submitNameBtn.onclick(); });
 
-        Auth.checkIdentity();
+        dom.submitNameBtn.addEventListener('click', handleLoginSubmit);
+        dom.passwordInput.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') {
+                handleLoginSubmit();
+            }
+        });
+        dom.nameInput.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter' && !existingIdentity) {
+                handleLoginSubmit();
+            }
+        });
 
+        dom.exportIdentityBtn.addEventListener('click', exportIdentity);
+        dom.importIdentityInput.addEventListener('change', importIdentity);
+
+ existingIdentity = Auth.checkIdentity(); // Auth. eklendi
     })();
 }
 
-// --- UYGULAMAYI BAŞLAT ---
-// Sayfa yüklendiğinde `init` fonksiyonunu çağırarak her şeyin doğru başlamasını sağla.
 document.addEventListener('DOMContentLoaded', init);
