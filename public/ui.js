@@ -1,13 +1,16 @@
-// /public/ui.js (GÜNCEL SÜRÜM - DM Tıklama Özelliği Eklendi)
+// /public/ui.js (GÜNCEL SÜRÜM - Mesaj Silme Butonlu)
 
 function escapeHtml(str) {
-    // DOMPurify sanitization'ı burada bir katman olarak kalabilir, zararı yok.
     return DOMPurify.sanitize(str);
 }
 
-// --- BAŞLANGIÇ: GÜVENLİ addChatMessage FONKSİYONU ---
 export function addChatMessage(data, messagesEl, lang) {
     const item = document.createElement('li');
+    // Mesajın ID'sini li elementine data attribute olarak ekle
+    if (data._id) {
+        item.dataset.messageId = data._id;
+    }
+
     if (data.isSelf) {
         item.classList.add('self-message');
     }
@@ -17,31 +20,26 @@ export function addChatMessage(data, messagesEl, lang) {
 
     const usernameStrong = document.createElement('strong');
     
-    // --- BAŞLANGIÇ: DM TIKLAMA İÇİN DEĞİŞTİRİLEN BÖLÜM ---
     const usernameSpan = document.createElement('span');
     usernameSpan.textContent = data.username || 'Bilinmeyen';
     
-    // Eğer bu bir genel sohbet mesajı ise ve gönderen kendimiz değilsek,
-    // public key'i data attribute olarak ekliyoruz.
     if (data.publicKey && !data.isSelf) {
-        usernameSpan.className = 'username-clickable'; // Yeni Class
-        usernameSpan.dataset.publicKey = data.publicKey; // Public Key eklendi
+        usernameSpan.className = 'username-clickable';
+        usernameSpan.dataset.publicKey = data.publicKey;
     }
     
     usernameStrong.appendChild(usernameSpan); 
     
-    // --- BAŞLANGIÇ: GÜVENLİ İKON VE METİN EKLEME (XSS DÜZELTMESİ) ---
-    // .append() yerine güvenli DOM metotları kullanılıyor.
     const statusText = document.createTextNode(`${data.isEncrypted ? ' 🔒' : ''}: `);
     usernameStrong.appendChild(statusText);
-    // --- BİTİŞ: GÜVENLİ İKON VE METİN EKLEME ---
 
     const messageText = document.createElement('span');
-    // .textContent kullanarak mesajı güvenli bir şekilde ata
     messageText.textContent = data.message || '';
 
     messageContent.appendChild(usernameStrong);
     messageContent.appendChild(messageText);
+
+    item.appendChild(messageContent);
 
     const timestampSpan = document.createElement('span');
     timestampSpan.className = 'timestamp';
@@ -54,21 +52,34 @@ export function addChatMessage(data, messagesEl, lang) {
     }
 
     if (dateObject && dateObject.toString() !== 'Invalid Date') {
-        // .textContent kullanarak zaman damgasını güvenli bir şekilde ata
-        timestampSpan.textContent = dateObject.toLocaleTimeString(lang || 'tr-TR', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+        timestampSpan.textContent = dateObject.toLocaleTimeString(lang || 'tr-TR', { hour: '2-digit', minute: '2-digit' });
     } else {
-        timestampSpan.textContent = data.timestamp || '';
+        timestampSpan.textContent = '';
     }
 
-    item.appendChild(messageContent);
-    item.appendChild(timestampSpan);
+    // --- BAŞLANGIÇ: SİLME BUTONU EKLEME ---
+    const controlsContainer = document.createElement('div');
+    controlsContainer.className = 'message-controls';
+    controlsContainer.appendChild(timestampSpan);
+    
+    // Eğer bu mesaj kendimize ait bir DM ise, silme butonu ekle
+    if (data.isSelf && data.isEncrypted && data._id) {
+        const deleteBtn = document.createElement('button');
+        deleteBtn.className = 'delete-btn';
+        deleteBtn.innerHTML = '&#128465;'; // Çöp kutusu ikonu
+        deleteBtn.dataset.messageId = data._id;
+        deleteBtn.title = 'Mesajı sil';
+        controlsContainer.appendChild(deleteBtn);
+    }
+    
+    item.appendChild(controlsContainer);
+    // --- BİTİŞ: SİLME BUTONU EKLEME ---
     
     messagesEl.appendChild(item);
     setTimeout(() => {
         messagesEl.scrollTop = messagesEl.scrollHeight;
     }, 10);
 }
-// --- BİTİŞ: GÜVENLİ FONKSİYON ---
 
 export function addLog(text, messagesEl, t) {
     addChatMessage({ username: t('system_username'), message: text, timestamp: new Date() }, messagesEl, localStorage.getItem('language'));

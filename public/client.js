@@ -1,9 +1,10 @@
-// /public/client.js (SON, EKSİKSİZ SÜRÜM - Tüm Düzeltmeler Dahil)
+// /public/client.js (SON, EKSİKSİZ SÜRÜM - decryptPointer Hatası Düzeltildi)
 import * as Crypto from './crypto.js';
 import * as UI from './ui.js';
 import * as Auth from './auth.js';
 function init() {
     (async () => {
+        // ... (init fonksiyonunun başı aynı)
         let translations = {};
         async function setLanguage(lang) {
             try {
@@ -116,55 +117,105 @@ function init() {
                 if (partners) partners.forEach(user => UI.renderUser(user, dom.conversationsDiv, { identity, t, onUserClick: activateChat, isOnline: onlineUserMap.has(user.publicKey) }));
                 activateChat(null, t('general_chat_title'));
             });
+            
+            // --- BAŞLANGIÇ: 'conversation history' DÜZELTMESİ ---
             socket.on('conversation history', (data) => {
                 dom.messages.innerHTML = '';
                 if (!data || !data.history) return;
                 const recipientPKBuffer = sodium.from_base64(identity.publicKey);
                 const privateKeyBuffer = sodium.from_base64(identity.privateKey);
                 data.history.forEach(msg => {
-                    if (!data.partnerPublicKey) { UI.addChatMessage({ ...msg, isSelf: msg.username === identity.username }, dom.messages, localStorage.getItem('language')); return; }
-                    let isSelf = false, ciphertextToDecrypt = null;
-                    if (msg.ciphertext_for_sender) { try { sodium.crypto_box_seal_open(sodium.from_base64(msg.ciphertext_for_sender), recipientPKBuffer, privateKeyBuffer); ciphertextToDecrypt = msg.ciphertext_for_sender; isSelf = true; } catch (e) {} }
-                    if (!ciphertextToDecrypt && msg.ciphertext_for_recipient) { try { sodium.crypto_box_seal_open(sodium.from_base64(msg.ciphertext_for_recipient), recipientPKBuffer, privateKeyBuffer); ciphertextToDecrypt = msg.ciphertext_for_recipient; isSelf = false; } catch (e) {} }
-                    if (ciphertextToDecrypt) { try { const decrypted = sodium.to_string(sodium.crypto_box_seal_open(sodium.from_base64(ciphertextToDecrypt), recipientPKBuffer, privateKeyBuffer)); const sender = isSelf ? identity.username : (dmPartner?.username || onlineUserMap.get(data.partnerPublicKey)?.username || 'Bilinmeyen'); UI.addChatMessage({ username: sender, message: decrypted, timestamp: msg.timestamp, isSelf: isSelf, isEncrypted: true }, dom.messages, localStorage.getItem('language')); } catch (e) { UI.addLog(t('log_undecryptable_message'), dom.messages, t); } } else { UI.addLog(t('log_undecryptable_message'), dom.messages, t); }
+                    if (!data.partnerPublicKey) { 
+                        UI.addChatMessage({ ...msg, isSelf: msg.username === identity.username }, dom.messages, localStorage.getItem('language')); 
+                        return; 
+                    }
+                    
+                    // Artık Crypto.decryptPointer yerine sunucudan gelen açık public key'i kullanıyoruz
+                    const isSelf = (msg.senderPublicKey === identity.publicKey);
+                    let ciphertextToDecrypt = null;
+
+                    if (isSelf && msg.ciphertext_for_sender) {
+                        ciphertextToDecrypt = msg.ciphertext_for_sender;
+                    } else if (!isSelf && msg.ciphertext_for_recipient) {
+                        ciphertextToDecrypt = msg.ciphertext_for_recipient;
+                    }
+                    
+                    if (ciphertextToDecrypt) { 
+                        try { 
+                            const decrypted = sodium.to_string(sodium.crypto_box_seal_open(sodium.from_base64(ciphertextToDecrypt), recipientPKBuffer, privateKeyBuffer)); 
+                            const senderUsername = isSelf ? identity.username : (dmPartner?.username || onlineUserMap.get(data.partnerPublicKey)?.username || 'Bilinmeyen'); 
+                            UI.addChatMessage({ _id: msg._id, username: senderUsername, message: decrypted, timestamp: msg.timestamp, isSelf: isSelf, isEncrypted: true }, dom.messages, localStorage.getItem('language')); 
+                        } catch (e) { 
+                            UI.addLog(t('log_undecryptable_message'), dom.messages, t); 
+                        } 
+                    } else { 
+                        UI.addLog(t('log_undecryptable_message'), dom.messages, t); 
+                    }
                 });
             });
-            socket.on('private message', (data) => {
-                const isFromCurrent = dmPartner && data.senderPublicKey === dmPartner.publicKey;
-                if(isFromCurrent) { try { const decrypted = sodium.to_string(sodium.crypto_box_seal_open(sodium.from_base64(data.ciphertext), sodium.from_base64(identity.publicKey), sodium.from_base64(identity.privateKey))); const sender = onlineUserMap.get(data.senderPublicKey)?.username || 'Bilinmeyen'; playSound(); UI.addChatMessage({ username: sender, message: decrypted, timestamp: new Date(), isSelf: false, isEncrypted: true }, dom.messages, localStorage.getItem('language')); } catch (e) { UI.addLog(t('log_undecryptable_message'), dom.messages, t); } } else { const userEl = document.querySelector(`p[data-public-key="${data.senderPublicKey}"]`); if (userEl) { userEl.classList.add('new-message-indicator'); playSound(); } }
+            // --- BİTİŞ: 'conversation history' DÜZELTMESİ ---
+
+            // --- BAŞLANGIÇ: 'private message' DÜZELTMESİ ---
+            socket.on('private message', (msg) => {
+                if (document.querySelector(`li[data-message-id="${msg._id}"]`)) return;
+
+                // Artık Crypto.decryptPointer yerine sunucudan gelen açık public key'leri kullanıyoruz
+                const isSelf = (msg.senderPublicKey === identity.publicKey);
+                const partnerPK = isSelf ? msg.recipientPublicKey : msg.senderPublicKey;
+                
+                const isFromCurrent = dmPartner && partnerPK === dmPartner.publicKey;
+                
+                if (isFromCurrent) {
+                    const ciphertext = isSelf ? msg.ciphertext_for_sender : msg.ciphertext_for_recipient;
+                    try { 
+                        const decrypted = sodium.to_string(sodium.crypto_box_seal_open(sodium.from_base64(ciphertext), sodium.from_base64(identity.publicKey), sodium.from_base64(identity.privateKey))); 
+                        const senderUsername = isSelf ? identity.username : (dmPartner?.username || 'Bilinmeyen');
+                        playSound(); 
+                        UI.addChatMessage({ _id: msg._id, username: senderUsername, message: decrypted, timestamp: new Date(), isSelf: isSelf, isEncrypted: true }, dom.messages, localStorage.getItem('language')); 
+                    } catch (e) { 
+                        UI.addLog(t('log_undecryptable_message'), dom.messages, t); 
+                    }
+                } else if (!isSelf) { 
+                    const userEl = document.querySelector(`p[data-public-key="${msg.senderPublicKey}"]`); 
+                    if (userEl) { 
+                        userEl.classList.add('new-message-indicator'); 
+                        playSound(); 
+                    } 
+                }
             });
+            // --- BİTİŞ: 'private message' DÜZELTMESİ ---
+            
             socket.on('chat message', (data) => { if (!dmPartner && identity && data.username !== identity.username) { playSound(); UI.addChatMessage({ ...data, isSelf: false }, dom.messages, localStorage.getItem('language')); } });
             socket.on('new_conversation_partner', (partner) => { if (!dom.conversationsDiv.querySelector(`p[data-public-key="${partner.publicKey}"]`) && partner) { UI.renderUser(partner, dom.conversationsDiv, { identity, t, onUserClick: activateChat, isOnline: onlineUserMap.has(partner.publicKey) }); UI.updateConversationOnlineStatus(partner.publicKey, onlineUserMap.has(partner.publicKey), dom.conversationsDiv); } });
+            
+            socket.on('private message deleted', (messageId) => {
+                const messageElement = dom.messages.querySelector(`li[data-message-id="${messageId}"]`);
+                if (messageElement) {
+                    messageElement.remove();
+                }
+            });
         }
 
+        // ... (startChat, export/import, event listener'lar aynı kalıyor)
         async function startChat(id) {
             identity = id;
             return new Promise((resolve, reject) => {
                 const timestampHex = Date.now().toString(16).padStart(16, '0');
                 const randomBytes = sodium.to_hex(sodium.randombytes_buf(24));
                 const nonce = timestampHex + randomBytes;
-                
-                // --- DÜZELTME: EKSİK OLAN SIGNATURE TANIMI GERİ GELDİ ---
                 const signature = sodium.to_base64(sodium.crypto_sign_detached(sodium.from_hex(nonce), sodium.from_base64(identity.signPrivateKey)));
-                // --------------------------------------------------------
                 
                 socket = io({ auth: { publicKey: identity.signPublicKey, signature: signature, nonce: nonce } });
                 
-                // --- BAŞLANGIÇ: ALINMIŞ KULLANICI ADI HATASI YÖNETİMİ ---
                 socket.on('auth_error', (data) => {
                     alert("Giriş Yapılamadı: " + data.message);
                     if (socket) socket.disconnect();
-
-                    // UI'ı sıfırla
                     dom.loginOverlay.style.display = 'flex';
                     dom.nameInput.disabled = false;
                     dom.passwordInput.value = '';
                     dom.nameInput.focus();
-                    
-                    // Auth.js'in generic 'catch' bloğunu çalıştırmaması için özel bir hata fırlat
                     reject(new Error("AUTH_SPECIFIC_ERROR_HANDLED")); 
                 });
-                // --- BİTİŞ: ALINMIŞ KULLANICI ADI HATASI YÖNETİMİ ---
                 
                 socket.on('connect', () => {
                     console.log("Bağlantı başarılı, kimlik doğrulandı.");
@@ -175,8 +226,7 @@ function init() {
                     socket.emit('get conversations');
                     setupSocketListeners();
                     
-                    // --- BAŞLANGIÇ: UYUMLU HEARTBEAT SİSTEMİ ---
-                    const HEARTBEAT_INTERVAL = 20000; // 20 saniyeye düşürüldü
+                    const HEARTBEAT_INTERVAL = 20000;
                     let heartbeatIntervalId = setInterval(() => { 
                         if (socket.connected) socket.emit('heartbeat'); 
                     }, HEARTBEAT_INTERVAL);
@@ -188,14 +238,11 @@ function init() {
 
                     const visibilityHandler = () => {
                         if (document.visibilityState === 'visible' && socket.connected) {
-                            console.log("Sekme tekrar görünür, hemen heartbeat gönderiliyor.");
                             socket.emit('heartbeat');
                         }
                     };
                     document.addEventListener('visibilitychange', visibilityHandler);
-
                     if (socket.connected) socket.emit('heartbeat');
-                    // --- BİTİŞ: UYUMLU HEARTBEAT SİSTEMİ ---
                     
                     resolve();
                 });
@@ -270,11 +317,13 @@ function init() {
                 const publicKey = e.target.dataset.publicKey;
                 if (publicKey && publicKey !== identity.publicKey) {
                     const user = onlineUserMap.get(publicKey);
-                    if (user) {
-                        activateChat(user, user.username);
-                    } else {
-                        console.log("Kullanıcı online değil, şimdilik DM açılamıyor.");
-                    }
+                    if (user) activateChat(user, user.username);
+                }
+            }
+            if (e.target.classList.contains('delete-btn')) {
+                const messageId = e.target.dataset.messageId;
+                if (messageId && confirm(t('confirm_delete_message') || 'Bu mesajı herkesten silmek istediğinize emin misiniz?')) {
+                    socket.emit('delete private message', messageId);
                 }
             }
         });
@@ -293,8 +342,11 @@ function init() {
             const messageText = dom.input.value;
             dom.input.value = '';
             if (dmPartner) {
-                UI.addChatMessage({ username: identity.username, message: messageText, timestamp: new Date(), isSelf: true, isEncrypted: true }, dom.messages, localStorage.getItem('language'));
-                const payload = { recipientPublicKey: dmPartner.publicKey, ciphertext_for_recipient: sodium.to_base64(sodium.crypto_box_seal(messageText, sodium.from_base64(dmPartner.publicKey))), ciphertext_for_sender: sodium.to_base64(sodium.crypto_box_seal(messageText, sodium.from_base64(identity.publicKey))) };
+                const payload = { 
+                    recipientPublicKey: dmPartner.publicKey, 
+                    ciphertext_for_recipient: sodium.to_base64(sodium.crypto_box_seal(messageText, sodium.from_base64(dmPartner.publicKey))), 
+                    ciphertext_for_sender: sodium.to_base64(sodium.crypto_box_seal(messageText, sodium.from_base64(identity.publicKey))) 
+                };
                 socket.emit('private message', payload);
             } else {
                 UI.addChatMessage({ username: identity.username, message: messageText, timestamp: new Date(), isSelf: true, isEncrypted: false }, dom.messages, localStorage.getItem('language'));
@@ -310,16 +362,8 @@ function init() {
         });
 
         dom.submitNameBtn.addEventListener('click', handleLoginSubmit);
-        dom.passwordInput.addEventListener('keypress', (e) => {
-            if (e.key === 'Enter') {
-                handleLoginSubmit();
-            }
-        });
-        dom.nameInput.addEventListener('keypress', (e) => {
-            if (e.key === 'Enter' && !existingIdentity) {
-                handleLoginSubmit();
-            }
-        });
+        dom.passwordInput.addEventListener('keypress', (e) => { if (e.key === 'Enter') handleLoginSubmit(); });
+        dom.nameInput.addEventListener('keypress', (e) => { if (e.key === 'Enter' && !existingIdentity) handleLoginSubmit(); });
 
         dom.exportIdentityBtn.addEventListener('click', exportIdentity);
         dom.importIdentityInput.addEventListener('change', importIdentity);
