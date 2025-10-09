@@ -202,12 +202,16 @@ function init() {
                     
                     resolve();
                 });
+                
+                // --- BAŞLANGIÇ: GÜNCELLENMİŞ HATA YÖNETİMİ ---
                 socket.on('connect_error', (err) => {
-                    alert("Bağlanılamadı: " + err.message);
+                    console.error("Bağlantı Hatası (Detay):", err.message); // Hatayı konsola yazdır
+                    alert(t('connection_error_generic') || "Sunucuya bağlanılamadı. Lütfen daha sonra tekrar deneyin."); // Kullanıcıya genel mesaj göster
                     if (socket) socket.disconnect();
                     dom.loginOverlay.style.display = 'flex';
                     reject(err);
                 });
+                // --- BİTİŞ: GÜNCELLENMİŞ HATA YÖNETİMİ ---
             });
         }
 

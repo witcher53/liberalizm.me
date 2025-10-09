@@ -29,9 +29,12 @@ export function addChatMessage(data, messagesEl, lang) {
     }
     
     usernameStrong.appendChild(usernameSpan); 
-    // Şifre ikonunu ve iki noktayı (:) ekle
-    usernameStrong.append(`${data.isEncrypted ? ' 🔒' : ''}: `); 
-    // --- BİTİŞ: DM TIKLAMA İÇİN DEĞİŞTİRİLEN BÖLÜM ---
+    
+    // --- BAŞLANGIÇ: GÜVENLİ İKON VE METİN EKLEME (XSS DÜZELTMESİ) ---
+    // .append() yerine güvenli DOM metotları kullanılıyor.
+    const statusText = document.createTextNode(`${data.isEncrypted ? ' 🔒' : ''}: `);
+    usernameStrong.appendChild(statusText);
+    // --- BİTİŞ: GÜVENLİ İKON VE METİN EKLEME ---
 
     const messageText = document.createElement('span');
     // .textContent kullanarak mesajı güvenli bir şekilde ata
