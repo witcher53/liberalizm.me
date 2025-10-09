@@ -64,17 +64,14 @@ function initializeSocketListeners(io, redisClient) {
                     return;
                 }
                 
-                // --- BAŞLANGIÇ: YENİ EKLENEN KULLANICI ADI BENZERLİK KONTROLÜ ---
                 const existingUserByUsername = await usersCollection.findOne({ username: userData.username });
 
-                // Eğer bu kullanıcı adı başkasına aitse (farklı bir publicKey), hata gönder.
                 if (existingUserByUsername && existingUserByUsername.publicKey !== userData.boxPublicKey) {
                     console.log(`[Kimlik Doğrulama] Başarısız: '${userData.username}' adı zaten alınmış.`);
                     socket.emit('auth_error', { message: 'Bu kullanıcı adı zaten başkası tarafından kullanılıyor.' });
                     socket.disconnect();
                     return;
                 }
-                // --- BİTİŞ: YENİ EKLENEN KULLANICI ADI BENZERLİK KONTROLÜ ---
                 
                 socket.username = userData.username;
                 socket.publicKey = userData.boxPublicKey;
@@ -94,7 +91,6 @@ function initializeSocketListeners(io, redisClient) {
             }
         });
 
-        // --- BAŞLANGIÇ: KENDİNE MESAJ ATMA ÖZELLİĞİ (DEĞİŞİKLİK YOK) ---
         socket.on('get conversations', async () => {
             if (!socket.isAuthenticated) return;
             try {
@@ -107,11 +103,9 @@ function initializeSocketListeners(io, redisClient) {
                     const senderPK = Crypto.decryptPointer(msg.senderPointer);
                     const recipientPK = Crypto.decryptPointer(msg.recipientPointer);
 
-                    // Eğer mesaj başka biriyeyse, o kişiyi ekle
                     if (senderPK && senderPK !== socket.publicKey) partnerPublicKeys.add(senderPK);
                     if (recipientPK && recipientPK !== socket.publicKey) partnerPublicKeys.add(recipientPK);
                     
-                    // Eğer mesaj kendine ise, kendini ekle
                     if (senderPK && recipientPK && senderPK === socket.publicKey && recipientPK === socket.publicKey) {
                         partnerPublicKeys.add(socket.publicKey);
                     }
@@ -122,7 +116,6 @@ function initializeSocketListeners(io, redisClient) {
                 console.error(`[HATA] 'get conversations': ${err.message}`, err);
             }
         });
-        // --- BİTİŞ: KENDİNE MESAJ ATMA ÖZELLİĞİ ---
 
         socket.on('chat message', async (msg, callback) => {
             if (!socket.isAuthenticated) return;
@@ -136,15 +129,13 @@ function initializeSocketListeners(io, redisClient) {
                 }
                 const expireDate = new Date(Date.now() + 86400 * 1000);
                 
-                // --- BAŞLANGIÇ: GÜNCELLEME - PUBLIC KEY EKLENDİ ---
                 const data = { 
                     username: socket.username, 
                     message: message, 
                     timestamp: new Date(), 
                     expireAt: expireDate,
-                    publicKey: socket.publicKey // Gönderenin publicKey'ini ekle
+                    publicKey: socket.publicKey
                 };
-                // --- BİTİŞ: GÜNCELLEME ---
 
                 await generalMessagesCollection.insertOne(data);
                 socket.broadcast.to(GENERAL_CHAT_ROOM).emit('chat message', data);
@@ -172,12 +163,10 @@ function initializeSocketListeners(io, redisClient) {
                 }
                 await dmMessagesCollection.insertOne(dbData);
                 
-                // Eğer alıcı kendin değilsen, mesajı online ise ona da gönder.
                 if (data.recipientPublicKey !== socket.publicKey) {
                     io.to(data.recipientPublicKey).emit('private message', { ciphertext: data.ciphertext_for_recipient, senderPublicKey: socket.publicKey });
                 }
 
-                // Sohbet listesinde anında görünmesi için partner bilgisini gönder (kendin olsan bile).
                 const recipientUser = await usersCollection.findOne({ publicKey: data.recipientPublicKey }, { projection: { username: 1, publicKey: 1, _id: 0 } });
                 if (recipientUser) {
                     socket.emit('new_conversation_partner', recipientUser);
@@ -220,10 +209,13 @@ function initializeSocketListeners(io, redisClient) {
             }
         });
 
+        // --- BAŞLANGIÇ: GÜNCELLENMİŞ HEARTBEAT TTL ---
         socket.on('heartbeat', async () => {
             if (!socket.isAuthenticated) return;
-            if (socket.publicKey) await redisClient.setEx(`user:${socket.publicKey}:heartbeat`, 60, '1');
+            // TTL 45 saniyeye güncellendi (20 saniyelik client interval'i için güvenli pay)
+            if (socket.publicKey) await redisClient.setEx(`user:${socket.publicKey}:heartbeat`, 45, '1');
         });
+        // --- BİTİŞ: GÜNCELLENMİŞ HEARTBEAT TTL ---
 
         socket.on('disconnect', async () => {
             console.log(`[Bağlantı Kesildi] ${socket.username || socket.id}`);
@@ -236,7 +228,8 @@ function initializeSocketListeners(io, redisClient) {
         });
     });
 
-    const CLEANUP_INTERVAL = 30000;
+    // --- BAŞLANGIÇ: GÜNCELLENMİŞ TEMİZLİK ARALIĞI ---
+    const CLEANUP_INTERVAL = 15000; // 15 saniyeye düşürüldü
     setInterval(async () => {
         try {
             const onlineKeys = await redisClient.sMembers('online_users_set');
@@ -252,6 +245,7 @@ function initializeSocketListeners(io, redisClient) {
             console.error('[Temizlik] Hata:', error);
         }
     }, CLEANUP_INTERVAL);
+    // --- BİTİŞ: GÜNCELLENMİŞ TEMİZLİK ARALIĞI ---
 }
 
 module.exports = {

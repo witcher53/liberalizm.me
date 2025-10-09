@@ -175,19 +175,17 @@ function init() {
                     socket.emit('get conversations');
                     setupSocketListeners();
                     
-                    // --- BAŞLANGIÇ: HEARTBEAT SİSTEMİ DÜZELTİLDİ ---
-                    const HEARTBEAT_INTERVAL = 25000;
+                    // --- BAŞLANGIÇ: UYUMLU HEARTBEAT SİSTEMİ ---
+                    const HEARTBEAT_INTERVAL = 20000; // 20 saniyeye düşürüldü
                     let heartbeatIntervalId = setInterval(() => { 
                         if (socket.connected) socket.emit('heartbeat'); 
                     }, HEARTBEAT_INTERVAL);
                     
-                    // Bağlantı kesildiğinde interval'i temizle
                     socket.once('disconnect', () => {
                         clearInterval(heartbeatIntervalId);
                         document.removeEventListener('visibilitychange', visibilityHandler); 
                     });
 
-                    // Sekme görünür olduğunda hemen bir heartbeat gönder
                     const visibilityHandler = () => {
                         if (document.visibilityState === 'visible' && socket.connected) {
                             console.log("Sekme tekrar görünür, hemen heartbeat gönderiliyor.");
@@ -196,22 +194,19 @@ function init() {
                     };
                     document.addEventListener('visibilitychange', visibilityHandler);
 
-                    // İlk başta heartbeat'i hemen gönder
                     if (socket.connected) socket.emit('heartbeat');
-                    // --- BİTİŞ: HEARTBEAT SİSTEMİ DÜZELTİLDİ ---
+                    // --- BİTİŞ: UYUMLU HEARTBEAT SİSTEMİ ---
                     
                     resolve();
                 });
                 
-                // --- BAŞLANGIÇ: GÜNCELLENMİŞ HATA YÖNETİMİ ---
                 socket.on('connect_error', (err) => {
-                    console.error("Bağlantı Hatası (Detay):", err.message); // Hatayı konsola yazdır
-                    alert(t('connection_error_generic') || "Sunucuya bağlanılamadı. Lütfen daha sonra tekrar deneyin."); // Kullanıcıya genel mesaj göster
+                    console.error("Bağlantı Hatası (Detay):", err.message);
+                    alert(t('connection_error_generic') || "Sunucuya bağlanılamadı. Lütfen daha sonra tekrar deneyin.");
                     if (socket) socket.disconnect();
                     dom.loginOverlay.style.display = 'flex';
                     reject(err);
                 });
-                // --- BİTİŞ: GÜNCELLENMİŞ HATA YÖNETİMİ ---
             });
         }
 
@@ -270,7 +265,6 @@ function init() {
             if(!isMuted) playSound();
         });
         
-        // --- BAŞLANGIÇ: DM TIKLAMA DİNLEYİCİSİ ---
         dom.messages.addEventListener('click', (e) => {
             if (e.target.classList.contains('username-clickable')) {
                 const publicKey = e.target.dataset.publicKey;
@@ -284,7 +278,6 @@ function init() {
                 }
             }
         });
-        // --- BİTİŞ: DM TIKLAMA DİNLEYİCİSİ ---
 
         const handleLoginSubmit = () => {
             if (existingIdentity) {
