@@ -1,4 +1,4 @@
-// /public/ui.js (Güvenli ve Tam Hali)
+// /public/ui.js (GÜNCEL SÜRÜM - DM Tıklama Özelliği Eklendi)
 
 function escapeHtml(str) {
     // DOMPurify sanitization'ı burada bir katman olarak kalabilir, zararı yok.
@@ -16,9 +16,23 @@ export function addChatMessage(data, messagesEl, lang) {
     messageContent.className = 'message-content';
 
     const usernameStrong = document.createElement('strong');
-    // .textContent kullanarak kullanıcı adını ve ikonu güvenli bir şekilde ata
-    usernameStrong.textContent = `${data.username || 'Bilinmeyen'}${data.isEncrypted ? ' 🔒' : ''}: `;
     
+    // --- BAŞLANGIÇ: DM TIKLAMA İÇİN DEĞİŞTİRİLEN BÖLÜM ---
+    const usernameSpan = document.createElement('span');
+    usernameSpan.textContent = data.username || 'Bilinmeyen';
+    
+    // Eğer bu bir genel sohbet mesajı ise ve gönderen kendimiz değilsek,
+    // public key'i data attribute olarak ekliyoruz.
+    if (data.publicKey && !data.isSelf) {
+        usernameSpan.className = 'username-clickable'; // Yeni Class
+        usernameSpan.dataset.publicKey = data.publicKey; // Public Key eklendi
+    }
+    
+    usernameStrong.appendChild(usernameSpan); 
+    // Şifre ikonunu ve iki noktayı (:) ekle
+    usernameStrong.append(`${data.isEncrypted ? ' 🔒' : ''}: `); 
+    // --- BİTİŞ: DM TIKLAMA İÇİN DEĞİŞTİRİLEN BÖLÜM ---
+
     const messageText = document.createElement('span');
     // .textContent kullanarak mesajı güvenli bir şekilde ata
     messageText.textContent = data.message || '';

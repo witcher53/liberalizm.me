@@ -1,7 +1,7 @@
-// /public/client.js (DÜZELTİLMİŞ VE EKSİKSİZ SÜRÜM)
+// /public/client.js (SON, EKSİKSİZ SÜRÜM - Tüm Düzeltmeler Dahil)
 import * as Crypto from './crypto.js';
 import * as UI from './ui.js';
- import * as Auth from './auth.js';
+import * as Auth from './auth.js';
 function init() {
     (async () => {
         let translations = {};
@@ -143,8 +143,29 @@ function init() {
                 const timestampHex = Date.now().toString(16).padStart(16, '0');
                 const randomBytes = sodium.to_hex(sodium.randombytes_buf(24));
                 const nonce = timestampHex + randomBytes;
+                
+                // --- DÜZELTME: EKSİK OLAN SIGNATURE TANIMI GERİ GELDİ ---
                 const signature = sodium.to_base64(sodium.crypto_sign_detached(sodium.from_hex(nonce), sodium.from_base64(identity.signPrivateKey)));
+                // --------------------------------------------------------
+                
                 socket = io({ auth: { publicKey: identity.signPublicKey, signature: signature, nonce: nonce } });
+                
+                // --- BAŞLANGIÇ: ALINMIŞ KULLANICI ADI HATASI YÖNETİMİ ---
+                socket.on('auth_error', (data) => {
+                    alert("Giriş Yapılamadı: " + data.message);
+                    if (socket) socket.disconnect();
+
+                    // UI'ı sıfırla
+                    dom.loginOverlay.style.display = 'flex';
+                    dom.nameInput.disabled = false;
+                    dom.passwordInput.value = '';
+                    dom.nameInput.focus();
+                    
+                    // Auth.js'in generic 'catch' bloğunu çalıştırmaması için özel bir hata fırlat
+                    reject(new Error("AUTH_SPECIFIC_ERROR_HANDLED")); 
+                });
+                // --- BİTİŞ: ALINMIŞ KULLANICI ADI HATASI YÖNETİMİ ---
+                
                 socket.on('connect', () => {
                     console.log("Bağlantı başarılı, kimlik doğrulandı.");
                     dom.loginOverlay.style.display = 'none';
@@ -153,8 +174,32 @@ function init() {
                     socket.emit('user authenticated', { username: identity.username, boxPublicKey: identity.publicKey });
                     socket.emit('get conversations');
                     setupSocketListeners();
+                    
+                    // --- BAŞLANGIÇ: HEARTBEAT SİSTEMİ DÜZELTİLDİ ---
                     const HEARTBEAT_INTERVAL = 25000;
-                    setInterval(() => { if (socket.connected) socket.emit('heartbeat'); }, HEARTBEAT_INTERVAL);
+                    let heartbeatIntervalId = setInterval(() => { 
+                        if (socket.connected) socket.emit('heartbeat'); 
+                    }, HEARTBEAT_INTERVAL);
+                    
+                    // Bağlantı kesildiğinde interval'i temizle
+                    socket.once('disconnect', () => {
+                        clearInterval(heartbeatIntervalId);
+                        document.removeEventListener('visibilitychange', visibilityHandler); 
+                    });
+
+                    // Sekme görünür olduğunda hemen bir heartbeat gönder
+                    const visibilityHandler = () => {
+                        if (document.visibilityState === 'visible' && socket.connected) {
+                            console.log("Sekme tekrar görünür, hemen heartbeat gönderiliyor.");
+                            socket.emit('heartbeat');
+                        }
+                    };
+                    document.addEventListener('visibilitychange', visibilityHandler);
+
+                    // İlk başta heartbeat'i hemen gönder
+                    if (socket.connected) socket.emit('heartbeat');
+                    // --- BİTİŞ: HEARTBEAT SİSTEMİ DÜZELTİLDİ ---
+                    
                     resolve();
                 });
                 socket.on('connect_error', (err) => {
@@ -220,14 +265,30 @@ function init() {
             dom.soundToggle.textContent = isMuted ? t('sound_toggle_off') : t('sound_toggle_on');
             if(!isMuted) playSound();
         });
+        
+        // --- BAŞLANGIÇ: DM TIKLAMA DİNLEYİCİSİ ---
+        dom.messages.addEventListener('click', (e) => {
+            if (e.target.classList.contains('username-clickable')) {
+                const publicKey = e.target.dataset.publicKey;
+                if (publicKey && publicKey !== identity.publicKey) {
+                    const user = onlineUserMap.get(publicKey);
+                    if (user) {
+                        activateChat(user, user.username);
+                    } else {
+                        console.log("Kullanıcı online değil, şimdilik DM açılamıyor.");
+                    }
+                }
+            }
+        });
+        // --- BİTİŞ: DM TIKLAMA DİNLEYİCİSİ ---
 
-const handleLoginSubmit = () => {
-    if (existingIdentity) {
-        Auth.loginWithPassword(existingIdentity); // Auth. eklendi
-    } else {
-        Auth.createIdentity(); // Auth. eklendi
-    }
-};
+        const handleLoginSubmit = () => {
+            if (existingIdentity) {
+                Auth.loginWithPassword(existingIdentity);
+            } else {
+                Auth.createIdentity();
+            }
+        };
 
         dom.form.addEventListener('submit', (e) => {
             e.preventDefault();
@@ -266,7 +327,7 @@ const handleLoginSubmit = () => {
         dom.exportIdentityBtn.addEventListener('click', exportIdentity);
         dom.importIdentityInput.addEventListener('change', importIdentity);
 
- existingIdentity = Auth.checkIdentity(); // Auth. eklendi
+        existingIdentity = Auth.checkIdentity();
     })();
 }
 

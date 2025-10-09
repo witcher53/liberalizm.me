@@ -64,6 +64,10 @@ export async function loginWithPassword(tempIdentity) {
         };
         await callbacks.startChat(fullIdentity);
     } catch (e) {
+        // client.js'ten gelen özel hatayı yoksay
+        if (e.message === "AUTH_SPECIFIC_ERROR_HANDLED") {
+            return;
+        }
         console.error("Giriş sırasında hata:", e);
         alert(utils.t('alert_wrong_password'));
     }
@@ -97,6 +101,10 @@ export async function createIdentity() {
         saveIdentity(identity);
         await callbacks.startChat(identity);
     } catch (e) {
+        // client.js'ten gelen özel hatayı yoksay
+        if (e.message === "AUTH_SPECIFIC_ERROR_HANDLED") {
+            return;
+        }
         console.error("Kimlik oluşturulurken hata:", e);
         alert(utils.t('error_creating_identity'));
     }

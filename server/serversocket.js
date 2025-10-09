@@ -1,4 +1,4 @@
-// /server/serversocket.js (Kendine Mesaj Atma Özellikli Son Hali)
+// /server/serversocket.js (GÜNCEL SÜRÜM - Benzersiz Kullanıcı Adı ve DM Hazırlığı)
 const { RateLimiterMemory } = require('rate-limiter-flexible');
 const nacl = require('tweetnacl');
 const { createAdapter } = require('@socket.io/redis-adapter');
@@ -63,6 +63,19 @@ function initializeSocketListeners(io, redisClient) {
                     socket.disconnect();
                     return;
                 }
+                
+                // --- BAŞLANGIÇ: YENİ EKLENEN KULLANICI ADI BENZERLİK KONTROLÜ ---
+                const existingUserByUsername = await usersCollection.findOne({ username: userData.username });
+
+                // Eğer bu kullanıcı adı başkasına aitse (farklı bir publicKey), hata gönder.
+                if (existingUserByUsername && existingUserByUsername.publicKey !== userData.boxPublicKey) {
+                    console.log(`[Kimlik Doğrulama] Başarısız: '${userData.username}' adı zaten alınmış.`);
+                    socket.emit('auth_error', { message: 'Bu kullanıcı adı zaten başkası tarafından kullanılıyor.' });
+                    socket.disconnect();
+                    return;
+                }
+                // --- BİTİŞ: YENİ EKLENEN KULLANICI ADI BENZERLİK KONTROLÜ ---
+                
                 socket.username = userData.username;
                 socket.publicKey = userData.boxPublicKey;
                 socket.isAuthenticated = true;
@@ -81,7 +94,7 @@ function initializeSocketListeners(io, redisClient) {
             }
         });
 
-        // --- BAŞLANGIÇ: KENDİNE MESAJ ATMA DÜZELTMESİ ---
+        // --- BAŞLANGIÇ: KENDİNE MESAJ ATMA ÖZELLİĞİ (DEĞİŞİKLİK YOK) ---
         socket.on('get conversations', async () => {
             if (!socket.isAuthenticated) return;
             try {
@@ -109,7 +122,7 @@ function initializeSocketListeners(io, redisClient) {
                 console.error(`[HATA] 'get conversations': ${err.message}`, err);
             }
         });
-        // --- BİTİŞ: KENDİNE MESAJ ATMA DÜZELTMESİ ---
+        // --- BİTİŞ: KENDİNE MESAJ ATMA ÖZELLİĞİ ---
 
         socket.on('chat message', async (msg, callback) => {
             if (!socket.isAuthenticated) return;
@@ -122,7 +135,17 @@ function initializeSocketListeners(io, redisClient) {
                     return;
                 }
                 const expireDate = new Date(Date.now() + 86400 * 1000);
-                const data = { username: socket.username, message: message, timestamp: new Date(), expireAt: expireDate };
+                
+                // --- BAŞLANGIÇ: GÜNCELLEME - PUBLIC KEY EKLENDİ ---
+                const data = { 
+                    username: socket.username, 
+                    message: message, 
+                    timestamp: new Date(), 
+                    expireAt: expireDate,
+                    publicKey: socket.publicKey // Gönderenin publicKey'ini ekle
+                };
+                // --- BİTİŞ: GÜNCELLEME ---
+
                 await generalMessagesCollection.insertOne(data);
                 socket.broadcast.to(GENERAL_CHAT_ROOM).emit('chat message', data);
                 if (typeof callback === 'function') callback({ status: 'ok' });
