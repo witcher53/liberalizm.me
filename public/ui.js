@@ -1,36 +1,35 @@
-// /public/ui.js (NİHAİ SÜRÜM - Resim Görüntüleme Desteği)
+// /public/ui.js (TAM DÜZELTİLMİŞ SÜRÜM)
 
 function escapeHtml(str) {
     return DOMPurify.sanitize(str);
 }
 
-// ✅ YENİ: Dosyayı deşifre etme ve blob URL oluşturma fonksiyonu
+// Dosyayı deşifre etme ve blob URL oluşturma
 async function decryptAndCreateBlobUrl(fileUrl, fileKeyBase64) {
-    // 1. Şifreli Dosyayı CDN'den indir (ArrayBuffer olarak)
-    const response = await fetch(fileUrl);
-    if (!response.ok) throw new Error(`Dosya indirme başarısız: HTTP ${response.status}`);
-    const encryptedFileBuffer = await response.arrayBuffer();
-    const encryptedFileBytes = new Uint8Array(encryptedFileBuffer);
-    
-    // 2. Şifreleme Anahtarını (FileKey) çıkar
-    const fileKey = sodium.from_base64(fileKeyBase64);
-    
-    // 3. Dosyadan Nonce ve Şifreli Metin/MAC'i çıkar (Nonce, client.js'te başa eklenmişti)
-    const NONCE_BYTES = 24; // XChaCha20 için nonce boyutu 24 byte'tır
-    const nonce = encryptedFileBytes.slice(0, NONCE_BYTES); // Nonce'ı dosyanın başından oku
-    const ciphertextWithMac = encryptedFileBytes.slice(NONCE_BYTES);
+    try {
+        const response = await fetch(fileUrl);
+        if (!response.ok) throw new Error(`Dosya indirme başarısız: HTTP ${response.status}`);
+        const encryptedFileBuffer = await response.arrayBuffer();
+        const encryptedFileBytes = new Uint8Array(encryptedFileBuffer);
+        
+        const fileKey = sodium.from_base64(fileKeyBase64);
+        const NONCE_BYTES = 24;
+        const nonce = encryptedFileBytes.slice(0, NONCE_BYTES);
+        const ciphertextWithMac = encryptedFileBytes.slice(NONCE_BYTES);
 
-    // 4. Dosyayı deşifre et
-    const decryptedFileBytes = sodium.crypto_aead_xchacha20poly1305_ietf_decrypt(
-        ciphertextWithMac, 
-        null, 
-        nonce, 
-        fileKey
-    );
-    
-    // 5. Blob oluştur ve URL döndür
-    const fileBlob = new Blob([decryptedFileBytes]); // Tipi tarayıcıya bırak
-    return URL.createObjectURL(fileBlob);
+        const decryptedFileBytes = sodium.crypto_aead_xchacha20poly1305_ietf_decrypt(
+            ciphertextWithMac, 
+            null, 
+            nonce, 
+            fileKey
+        );
+        
+        const fileBlob = new Blob([decryptedFileBytes], { type: 'image/jpeg' });
+        return URL.createObjectURL(fileBlob);
+    } catch (error) {
+        console.error("Deşifreleme hatası:", error);
+        throw error;
+    }
 }
 
 export function addChatMessage(data, messagesEl, lang) {
@@ -63,65 +62,66 @@ export function addChatMessage(data, messagesEl, lang) {
 
     const messageText = document.createElement('span');
     
-    // ✅ GÜNCELLEME: Mesaj tipi kontrolü ve asenkron görüntüleme
     if (data.messageType === 'image' && data.message) {
-        
-        let fileUrl, encryptedKeyBase64;
-
-        if (typeof data.message === 'string') {
-            [fileUrl, encryptedKeyBase64] = data.message.split('::');
-        } else {
-            // Bu sadece history için geçerli olabilir (şu anki client.js yapısında buraya gelmemeli)
-             fileUrl = data.message.fileUrl;
-             encryptedKeyBase64 = data.message.encryptedKeyBase64;
-        }
-
-        // Yer tutucu ekle
-        messageText.textContent = data.t('log_upload_start'); 
         messageContent.appendChild(usernameStrong);
         messageContent.appendChild(messageText);
         item.appendChild(messageContent);
-        messagesEl.appendChild(item); // Mesajı hemen ekle
+        messagesEl.appendChild(item);
         
-        // Bu veriler client.js'ten geliyor:
-        const recipientPKBuffer = sodium.from_base64(data.identity.publicKey);
-        const privateKeyBuffer = sodium.from_base64(data.identity.privateKey);
+        messageText.textContent = '📷 Resim yükleniyor...';
 
-        if (fileUrl && encryptedKeyBase64) {
-            // 1. Dosya şifreleme anahtarını (FileKey) deşifre et
-            try {
-                const fileKeyBase64 = sodium.to_string(sodium.crypto_box_seal_open(sodium.from_base64(encryptedKeyBase64), recipientPKBuffer, privateKeyBuffer));
-                
-                // 2. Resmi indir, deşifre et ve görüntüle
-                decryptAndCreateBlobUrl(fileUrl, fileKeyBase64)
-                    .then(blobUrl => {
-                        const img = document.createElement('img');
-                        img.src = blobUrl;
-                        img.alt = 'Deşifrelenmiş Resim';
-                        img.style.maxWidth = '300px'; 
-                        img.style.maxHeight = '300px'; 
-                        img.style.display = 'block';
-                        img.style.marginTop = '5px';
-                        img.style.borderRadius = '8px';
-                        img.style.cursor = 'pointer';
-                        img.onclick = () => window.open(blobUrl, '_blank');
-                        
-                        messageText.innerHTML = ''; 
-                        messageText.appendChild(img);
-                    })
-                    .catch(err => {
-                        console.error("Resim deşifre/görüntüleme hatası:", err);
-                        messageText.textContent = data.t('log_image_decrypt_failed'); 
-                    });
+        const parts = data.message.split('::');
+        if (parts.length !== 2) {
+            messageText.textContent = '❌ Geçersiz resim formatı';
+            return;
+        }
 
-            } catch(e) {
-                console.error("Anahtar deşifre hatası:", e);
-                messageText.textContent = data.t('log_image_decrypt_failed');
-            }
+        const [fileUrl, encryptedKeyBase64] = parts;
+
+        if (!data.identity || !data.privateKey) {
+            messageText.textContent = '❌ Kimlik bilgisi eksik';
+            return;
+        }
+
+        try {
+            const recipientPKBuffer = sodium.from_base64(data.identity.publicKey);
+            const privateKeyBuffer = sodium.from_base64(data.privateKey);
+            
+            const fileKeyBase64 = sodium.to_string(
+                sodium.crypto_box_seal_open(
+                    sodium.from_base64(encryptedKeyBase64), 
+                    recipientPKBuffer, 
+                    privateKeyBuffer
+                )
+            );
+            
+            decryptAndCreateBlobUrl(fileUrl, fileKeyBase64)
+                .then(blobUrl => {
+                    const img = document.createElement('img');
+                    img.src = blobUrl;
+                    img.alt = 'Şifreli Resim';
+                    img.style.maxWidth = '300px'; 
+                    img.style.maxHeight = '300px'; 
+                    img.style.display = 'block';
+                    img.style.marginTop = '5px';
+                    img.style.borderRadius = '8px';
+                    img.style.cursor = 'pointer';
+                    img.onclick = () => window.open(blobUrl, '_blank');
+                    
+                    messageText.innerHTML = '';
+                    messageText.appendChild(img);
+                })
+                .catch(err => {
+                    console.error("Resim gösterme hatası:", err);
+                    messageText.textContent = '❌ Resim gösterilemedi';
+                });
+
+        } catch (e) {
+            console.error("Anahtar deşifre hatası:", e);
+            messageText.textContent = '❌ Resim deşifrelenemedi';
         }
         
     } else {
-        // Varsayılan: Metin mesajını göster
         messageText.textContent = data.message || '';
         messageContent.appendChild(usernameStrong);
         messageContent.appendChild(messageText);
@@ -129,7 +129,6 @@ export function addChatMessage(data, messagesEl, lang) {
         messagesEl.appendChild(item);
     }
     
-    // Zaman damgası ve silme butonu mantığı
     const timestampSpan = document.createElement('span');
     timestampSpan.className = 'timestamp';
 
@@ -167,7 +166,17 @@ export function addChatMessage(data, messagesEl, lang) {
 }
 
 export function addLog(text, messagesEl, t) {
-    addChatMessage({ username: t('system_username'), message: text, timestamp: new Date() }, messagesEl, localStorage.getItem('language'));
+    const item = document.createElement('li');
+    item.classList.add('log');
+    const messageContent = document.createElement('div');
+    messageContent.className = 'message-content';
+    messageContent.textContent = text;
+    item.appendChild(messageContent);
+    messagesEl.appendChild(item);
+    
+    setTimeout(() => {
+        messagesEl.scrollTop = messagesEl.scrollHeight;
+    }, 10);
 }
 
 export function updateConversationOnlineStatus(publicKey, isOnline, conversationsDiv) {
