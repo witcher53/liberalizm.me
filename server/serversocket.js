@@ -1,4 +1,5 @@
-// /server/serversocket.js (GÜNCEL SÜRÜM - decryptPointer Hatası Düzeltildi)
+// /server/serversocket.js (Genel Sohbet için Redis Kullanacak Şekilde Güncellendi)
+
 const { RateLimiterMemory } = require('rate-limiter-flexible');
 const nacl = require('tweetnacl');
 const { createAdapter } = require('@socket.io/redis-adapter');
@@ -9,7 +10,6 @@ const Mongo = require('./servermongo.js');
 
 const GENERAL_CHAT_ROOM = 'general_chat_room';
 
-// ... (setupRedisAdapter fonksiyonu aynı kalıyor)
 async function setupRedisAdapter(io) {
     const redis = require('redis');
     const redisClient = redis.createClient({ url: 'redis://localhost:6379' });
@@ -25,13 +25,15 @@ async function setupRedisAdapter(io) {
 
 
 function initializeSocketListeners(io, redisClient) {
-    const { dmMessagesCollection, generalMessagesCollection, usersCollection } = Mongo.getCollections();
+    const { dmMessagesCollection, usersCollection } = Mongo.getCollections();
     const rateLimiter = new RateLimiterMemory({ points: 10, duration: 1 });
     const messageLimiter = new RateLimiterMemory({ points: 5, duration: 2 });
     const privateMessageLimiter = new RateLimiterMemory({ points: 10, duration: 2 });
     const NONCE_EXPIRE_SECONDS = 300;
 
-    // ... (io.use middleware fonksiyonu aynı kalıyor)
+    const GENERAL_CHAT_REDIS_KEY = 'general_chat_history';
+    const MAX_GENERAL_MESSAGES = 50;
+
     io.use(async (socket, next) => {
         try {
             await rateLimiter.consume(socket.handshake.address);
@@ -57,7 +59,6 @@ function initializeSocketListeners(io, redisClient) {
     });
 
     io.on('connection', (socket) => {
-        // ... (Diğer listener'lar aynı)
         console.log(`[Bağlantı] Yeni istemci: ${socket.id}`);
         socket.isAuthenticated = false;
 
@@ -132,31 +133,24 @@ function initializeSocketListeners(io, redisClient) {
                     if (typeof callback === 'function') callback({ status: 'error', message: 'Geçersiz mesaj.' });
                     return;
                 }
-                const expireDate = new Date(Date.now() + 86400 * 1000);
                 
-                const dbData = { 
+                const redisData = { 
                     username: socket.username, 
                     message: message, 
-                    timestamp: new Date(), 
-                    expireAt: expireDate,
-                    senderPointer: Crypto.encryptPointer(socket.publicKey)
-                };
-                await generalMessagesCollection.insertOne(dbData);
-
-                const broadcastData = {
-                    ...dbData,
+                    timestamp: new Date(),
                     publicKey: socket.publicKey
                 };
-                delete broadcastData.senderPointer;
 
-                socket.broadcast.to(GENERAL_CHAT_ROOM).emit('chat message', broadcastData);
+                await redisClient.lPush(GENERAL_CHAT_REDIS_KEY, JSON.stringify(redisData));
+                await redisClient.lTrim(GENERAL_CHAT_REDIS_KEY, 0, MAX_GENERAL_MESSAGES - 1);
+
+                socket.broadcast.to(GENERAL_CHAT_ROOM).emit('chat message', redisData);
                 if (typeof callback === 'function') callback({ status: 'ok' });
             } catch (rejRes) {
                 if (typeof callback === 'function') callback({ status: 'error', message: 'Çok hızlı mesaj gönderiyorsun.' });
             }
         });
 
-        // --- BAŞLANGIÇ: 'private message' DÜZELTMESİ ---
         socket.on('private message', async (data) => {
             if (!socket.isAuthenticated) return;
             try {
@@ -175,7 +169,6 @@ function initializeSocketListeners(io, redisClient) {
                 }
                 const result = await dmMessagesCollection.insertOne(dbData);
                 
-                // İstemciye gönderilecek obje (şifreli pointer'lar yerine açık public key'ler)
                 const messageForClient = { 
                     ...dbData, 
                     _id: result.insertedId,
@@ -202,7 +195,6 @@ function initializeSocketListeners(io, redisClient) {
                 }
             }
         });
-        // --- BİTİŞ: 'private message' DÜZELTMESİ ---
 
         socket.on('delete private message', async (messageId) => {
             if (!socket.isAuthenticated || !messageId) return;
@@ -234,26 +226,15 @@ function initializeSocketListeners(io, redisClient) {
             }
         });
         
-        // --- BAŞLANGIÇ: 'get conversation history' DÜZELTMESİ ---
         socket.on('get conversation history', async (otherUserPublicKey) => {
             if (!socket.isAuthenticated) return;
             try {
                 let history;
                 if (otherUserPublicKey === null) {
-                    history = await generalMessagesCollection.find({}).sort({ _id: -1 }).limit(100).toArray();
-                    history.forEach(msg => {
-                        if (msg.senderPointer) {
-                            msg.publicKey = Crypto.decryptPointer(msg.senderPointer);
-                            delete msg.senderPointer;
-                        }
-                    });
+                    const results = await redisClient.lRange(GENERAL_CHAT_REDIS_KEY, 0, MAX_GENERAL_MESSAGES - 1);
+                    history = results.map(item => JSON.parse(item));
+                    history.reverse();
                 } else {
-                    const expectedKeyLength = 43;
-                    const base64UrlRegex = /^[A-Za-z0-9\-_]+$/;
-                    if (typeof otherUserPublicKey !== 'string' || otherUserPublicKey.length !== expectedKeyLength || !base64UrlRegex.test(otherUserPublicKey)) {
-                        console.warn(`[GÜVENLİK] Geçersiz publicKey formatı: ${otherUserPublicKey}`);
-                        return;
-                    }
                     const myFingerprint = Crypto.pointerFingerprint(socket.publicKey);
                     const otherFingerprint = Crypto.pointerFingerprint(otherUserPublicKey);
                     history = await dmMessagesCollection.find({ 
@@ -263,23 +244,21 @@ function initializeSocketListeners(io, redisClient) {
                         ] 
                     }).sort({ timestamp: -1 }).limit(100).toArray();
 
-                    // DM geçmişi için de şifreli pointer'ları çöz
                     history.forEach(msg => {
                         if (msg.senderPointer) msg.senderPublicKey = Crypto.decryptPointer(msg.senderPointer);
                         if (msg.recipientPointer) msg.recipientPublicKey = Crypto.decryptPointer(msg.recipientPointer);
                         delete msg.senderPointer;
                         delete msg.recipientPointer;
                     });
+                    history.reverse();
                 }
-                history.reverse();
+                
                 socket.emit('conversation history', { history: history, partnerPublicKey: otherUserPublicKey });
             } catch (err) {
                  console.error(`[HATA] 'get conversation history': ${err.message}`, err);
             }
         });
-        // --- BİTİŞ: 'get conversation history' DÜZELTMESİ ---
 
-        // ... (heartbeat ve disconnect aynı)
         socket.on('heartbeat', async () => {
             if (!socket.isAuthenticated) return;
             if (socket.publicKey) await redisClient.setEx(`user:${socket.publicKey}:heartbeat`, 45, '1');
