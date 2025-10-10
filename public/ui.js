@@ -1,4 +1,4 @@
-// /public/ui.js (NİHAİ SÜRÜM - Kendi Online Durumunu Gösterme Düzeltmesi)
+// /public/ui.js (NİHAİ SÜRÜM - Resim Görüntüleme Desteği)
 
 function escapeHtml(str) {
     return DOMPurify.sanitize(str);
@@ -6,7 +6,6 @@ function escapeHtml(str) {
 
 export function addChatMessage(data, messagesEl, lang) {
     const item = document.createElement('li');
-    // Mesajın ID'sini li elementine data attribute olarak ekle
     if (data._id) {
         item.dataset.messageId = data._id;
     }
@@ -34,7 +33,29 @@ export function addChatMessage(data, messagesEl, lang) {
     usernameStrong.appendChild(statusText);
 
     const messageText = document.createElement('span');
-    messageText.textContent = data.message || '';
+    
+    // ✅ YENİ: Mesaj tipi kontrolü
+    if (data.messageType === 'image' && data.message && data.message.startsWith('http')) {
+        // Eğer mesaj tipi resimse, şifrelenmiş resim url'sini göster
+        const img = document.createElement('img');
+        img.src = data.message;
+        img.alt = 'Şifreli Resim';
+        img.style.maxWidth = '300px'; 
+        img.style.maxHeight = '300px'; 
+        img.style.display = 'block';
+        img.style.marginTop = '5px';
+
+        // Resmi bir konteynere sar
+        const imageWrapper = document.createElement('div');
+        imageWrapper.appendChild(img);
+        
+        // Resim etiketini mesaj içeriğine ekle
+        messageText.innerHTML = ''; // Metin alanını temizle
+        messageText.appendChild(imageWrapper);
+    } else {
+        // Varsayılan: Metin mesajını göster
+        messageText.textContent = data.message || '';
+    }
 
     messageContent.appendChild(usernameStrong);
     messageContent.appendChild(messageText);
@@ -62,11 +83,10 @@ export function addChatMessage(data, messagesEl, lang) {
     controlsContainer.className = 'message-controls';
     controlsContainer.appendChild(timestampSpan);
     
-    // Eğer bu mesaj kendimize ait bir DM ise, silme butonu ekle
     if (data.isSelf && data.isEncrypted && data._id) {
         const deleteBtn = document.createElement('button');
         deleteBtn.className = 'delete-btn';
-        deleteBtn.innerHTML = '&#128465;'; // Çöp kutusu ikonu
+        deleteBtn.innerHTML = '&#128465;'; 
         deleteBtn.dataset.messageId = data._id;
         deleteBtn.title = 'Mesajı sil';
         controlsContainer.appendChild(deleteBtn);
@@ -85,7 +105,6 @@ export function addLog(text, messagesEl, t) {
     addChatMessage({ username: t('system_username'), message: text, timestamp: new Date() }, messagesEl, localStorage.getItem('language'));
 }
 
-// ✅ DÜZELTME: Bu fonksiyonun export edildiğinden emin olundu.
 export function updateConversationOnlineStatus(publicKey, isOnline, conversationsDiv) {
     const userElement = conversationsDiv.querySelector(`p[data-public-key="${publicKey}"]`);
     if (userElement) {
@@ -107,10 +126,7 @@ export function renderUser(user, container, options) {
     const userElement = document.createElement('p');
     userElement.dataset.publicKey = user.publicKey;
 
-    // Kendi kullanıcımız için her zaman online göstergeyi ekle.
-    const shouldShowOnline = isOnline || (identity && user.publicKey === identity.publicKey);
-
-    if (shouldShowOnline) {
+    if (isOnline) {
         const indicatorSpan = document.createElement('span');
         indicatorSpan.className = 'online-indicator';
         indicatorSpan.textContent = '●';

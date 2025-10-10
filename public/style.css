@@ -309,4 +309,19 @@ li:not(.self-message) .message-controls {
     #form > button {
         margin: 0.25rem;
     }
+
+    #file-upload-label {
+            font-size: 1.5rem;
+            padding: 8px 10px;
+            color: #ccc;
+            user-select: none;
+        }
+        #file-upload-label:hover {
+            color: #fff;
+        }
+
+
+
+
+
 }

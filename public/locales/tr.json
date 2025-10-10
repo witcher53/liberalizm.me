@@ -15,7 +15,6 @@
   "conversations_title": "Sohbetlerin",
   "sound_toggle_on": "Ses Açık",
   "sound_toggle_off": "Ses Kapalı",
-  "send_button": "Gönder",  
   "you_suffix": "(Sen)",
   "system_username": "Sistem",
   "log_undecryptable_message": "Şifreli bir mesaj alınamadı veya çözülemedi.",
@@ -24,6 +23,14 @@
   "alert_password_required": "Lütfen en az 8 karakterli bir parola girin.",
   "alert_wrong_password": "Yanlış parola! Lütfen tekrar deneyin.",
   "alert_corrupt_identity": "Kaydedilmiş kimliğiniz bozuk görünüyor. Lütfen site verilerini temizleyip yeni bir kimlik oluşturun.",
-  "key_fingerprint_title": "Güvenlik Kodu (Anahtar Parmak İzi)",
-  "key_fingerprint_warning": "Bu kodu, partnerinizle harici bir kanaldan (telefon vb.) doğrulayın. Kodlar eşleşmiyorsa iletişiminiz tehlikeye girmiş demektir!"
+  "key_fingerprint_title": "Ortak Güvenlik Kodu",
+  "key_fingerprint_warning": "BU KODUN partnerinizin ekranındaki kod ile BİREBİR AYNI olduğunu DOĞRULAYIN. Eğer kodlar eşleşmiyorsa, iletişiminiz tehlikeye girmiş demektir!",
+  "send_button": "Gönder",
+  "upload_file_button": "Dosya Ekle",
+  "placeholder_file_attached": "Eklendi. Göndermek için Enter/Gönder'e basın.",
+  "log_upload_start": "Dosya şifreleniyor ve yükleniyor...",
+  "log_upload_success": "Dosya başarıyla yüklendi ve gönderildi.",
+  "log_upload_fail": "Yükleme başarısız oldu. Sunucu/API hatası.",
+  "alert_upload_failed": "Dosya yüklenirken kritik bir hata oluştu.",
+  "alert_file_read_error": "Dosya okuma hatası."
 }

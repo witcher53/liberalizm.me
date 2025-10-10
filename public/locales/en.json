@@ -25,6 +25,13 @@
   "log_undecryptable_message": "[An encrypted message could not be decrypted.]",
   "system_username": "System",
   "alert_corrupt_identity": "Your saved identity appears to be corrupt. Please clear your site data and create a new identity.",
-  "key_fingerprint_title": "Partner Key Code",
-  "key_fingerprint_warning": "COMPARE THIS CODE with the code your partner reads out to you. If codes do not match, DO NOT TRUST the communication."
+  "key_fingerprint_title": "Shared Safety Code",
+  "key_fingerprint_warning": "VERIFY THIS CODE IS IDENTICAL to the code on your partner's screen. If codes do not match, your communication is compromised!",
+  "upload_file_button": "Attach File",
+  "placeholder_file_attached": "Attached. Press Enter/Send to transmit.",
+  "log_upload_start": "Encrypting and uploading file...",
+  "log_upload_success": "File successfully uploaded and sent.",
+  "log_upload_fail": "Upload failed. Server/API error.",
+  "alert_upload_failed": "A critical error occurred while uploading the file.",
+  "alert_file_read_error": "File read error."
 }

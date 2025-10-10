@@ -1,19 +1,19 @@
-// /server/upload.js (Eksik Olan Dosya)
+// server/upload.js
 
 const multer = require('multer');
-const sharp = require('sharp');
 const { S3Client, PutObjectCommand } = require('@aws-sdk/client-s3');
 const crypto = require('crypto');
 
-// 1. Multer Ayarları (Güvenlik ve Limitler)
+// Multer Ayarları
 const storage = multer.memoryStorage();
 const upload = multer({
     storage: storage,
     limits: {
-        fileSize: 15 * 1024 * 1024 // 15 MB limit
+        fileSize: 10 * 1024 * 1024 // 10 MB limit
     },
     fileFilter: (req, file, cb) => {
-        const allowedTypes = ['image/jpeg', 'image/png', 'image/webp', 'application/octet-stream'];
+        // Şifreli dosya olduğu için sadece genel dosya tiplerini kabul et
+        const allowedTypes = ['application/octet-stream', 'image/jpeg', 'image/png'];
         if (allowedTypes.includes(file.mimetype)) {
             cb(null, true);
         } else {
@@ -22,10 +22,11 @@ const upload = multer({
     }
 });
 
-// 2. S3 / DigitalOcean Spaces İstemcisini Ayarla
+// S3 / DigitalOcean Spaces İstemcisi
+// Çevre değişkenlerine ihtiyacımız var: DO_SPACES_ENDPOINT, DO_SPACES_KEY, DO_SPACES_SECRET, DO_SPACES_BUCKET, DO_SPACES_CDN_URL
 const s3Client = new S3Client({
     endpoint: process.env.DO_SPACES_ENDPOINT,
-    region: 'us-east-1',
+    region: 'us-east-1', // Veya kullandığın DO/AWS bölgesi
     credentials: {
         accessKeyId: process.env.DO_SPACES_KEY,
         secretAccessKey: process.env.DO_SPACES_SECRET
@@ -37,43 +38,34 @@ const CDN_URL = process.env.DO_SPACES_CDN_URL;
 
 // Ana Yükleme Fonksiyonu
 const handleUpload = async (req, res) => {
+    // Kimlik doğrulama kontrolü (Örn: JWT, session kontrolü vs. burada olmalıdır!)
+    // Şimdilik sadece dosya var mı kontrol edelim:
     if (!req.file) {
         return res.status(400).json({ error: 'Yüklenecek dosya bulunamadı.' });
     }
 
     try {
+        // Rastgele dosya adı oluştur
         const randomFileName = crypto.randomBytes(20).toString('hex');
-        let processedBuffer;
-        let fileExtension;
-        let contentType;
-
-        if (req.file.mimetype.startsWith('image/')) {
-            processedBuffer = await sharp(req.file.buffer)
-                .resize({ width: 1920, height: 1080, fit: 'inside', withoutEnlargement: true })
-                .webp({ quality: 85 })
-                .toBuffer();
-            fileExtension = 'webp';
-            contentType = 'image/webp';
-        } else {
-            processedBuffer = req.file.buffer;
-            fileExtension = 'encrypted';
-            contentType = 'application/octet-stream';
-        }
-        
+        const fileExtension = 'encrypted'; 
         const finalFileName = `${randomFileName}.${fileExtension}`;
 
+        // S3'e yükle
         const uploadParams = {
             Bucket: BUCKET_NAME,
-            Key: `files/${finalFileName}`,
-            Body: processedBuffer,
-            ACL: 'public-read',
-            ContentType: contentType
+            Key: `encrypted-images/${finalFileName}`,
+            Body: req.file.buffer,
+            ACL: 'public-read', // CDN erişimi için
+            ContentType: 'application/octet-stream', // Her zaman şifreli ikili dosya olarak işaretle
+            // Güvenlik header'ları
+            CacheControl: 'max-age=31536000', // 1 yıl
         };
 
         await s3Client.send(new PutObjectCommand(uploadParams));
 
-        const fileUrl = `${CDN_URL}/files/${finalFileName}`;
+        const fileUrl = `${CDN_URL}/encrypted-images/${finalFileName}`;
         
+        console.log(`[Upload] Dosya yüklendi: ${finalFileName}`);
         res.status(200).json({ success: true, url: fileUrl });
 
     } catch (error) {

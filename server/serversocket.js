@@ -162,8 +162,9 @@ function initializeSocketListeners(io, redisClient) {
                     senderFingerprint: Crypto.pointerFingerprint(socket.publicKey), 
                     recipientFingerprint: Crypto.pointerFingerprint(data.recipientPublicKey), 
                     ciphertext_for_recipient: data.ciphertext_for_recipient, 
-                    timestamp: new Date() 
-                };
+                    timestamp: new Date(), 
+                     messageType: data.messageType || 'text' // ✅ YENİ: Mesaj tipi eklendi
+                 };
                 if(data.ciphertext_for_sender) {
                     dbData.ciphertext_for_sender = data.ciphertext_for_sender;
                 }

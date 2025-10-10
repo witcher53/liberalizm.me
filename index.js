@@ -9,6 +9,8 @@ const fs = require('fs');         // <-- EKLENDİ
 const path = require('path');     // <-- EKLENDİ
 
 // ✅ DÜZELTİLMİŞ: Bitişik dosya adları ve aynı dizinden yükleme yapılıyor.
+
+const Upload = require('./server/upload.js'); // <-- EKLENDİ
 const Vault = require('./server/servervault.js');
 const Mongo = require('./server/servermongo.js');
 const SocketManager = require('./server/serversocket.js');
@@ -53,7 +55,10 @@ app.get('/', (req, res) => {
 // --- BİTİŞ: CSP için Dinamik HTML Sunumu ---
 
 
+app.post('/api/upload', Upload.upload.single('file'), Upload.handleUpload); // <-- EKLENDİ
+
 // Statik dosyaları (CSS, client-side JS, resimler vb.) sun
+
 app.use(express.static('public'));
 
 async function startServer() {

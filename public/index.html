@@ -114,14 +114,24 @@
                 
                 <button id="sound-toggle" data-i18n="sound_toggle_off"></button>
             </div>
+          // ... (Diğer içerikler)
+
             <ul id="messages"></ul>
             <form id="form" action="">
+                <label for="file-input" id="file-upload-label" data-i18n="upload_file_button" style="cursor: pointer;">&#x1F4F7;</label> 
+                <input type="file" id="file-input" accept="image/jpeg,image/png" style="display: none;" />
+                
                 <input id="input" autocomplete="off" data-i18n-placeholder="input_placeholder_default" disabled /><button disabled data-i18n="send_button"></button>
             </form>
         </div>
     </div>
+// ...
+
+
+
+
     <script src="/sodium.js"></script>
     <script src="/socket.io/socket.io.js"></script>
-   <script type="module" src="/client.js?v=87"></script>
+   <script type="module" src="/client.js?v=47"></script>
 </body>
 </html>
