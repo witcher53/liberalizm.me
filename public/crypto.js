@@ -28,8 +28,10 @@ export async function decryptKey(encryptedString, password, salt) {
         const encryptedBytes = sodium.from_base64(parts[1]);
         const decryptedKeyBuffer = sodium.crypto_secretbox_open_easy(encryptedBytes, nonceBytes, derivedKey);
         return sodium.to_base64(decryptedKeyBuffer);
-    } catch (e) {
-        console.error('decryptKey failed:', e.message);
-        throw new Error("Şifre çözme başarısız — yanlış şifre veya bozuk veri.");
-    }
+ catch (e) {
+    console.error('Anahtar şifresi çözülemedi. Lütfen şifrenizi kontrol edin.'); // Genel hata mesajı
+    throw new Error("Şifre çözme başarısız — yanlış şifre veya bozuk veri.");
+}
+
+
 }
