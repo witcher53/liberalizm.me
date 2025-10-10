@@ -9,6 +9,67 @@
         #lang-switcher { position: absolute; top: 10px; right: 150px; z-index: 300; }
         #lang-switcher button { background: #444; border: 1px solid #666; color: white; padding: 5px 8px; cursor: pointer; border-radius: 3px; }
         #lang-switcher button.active { background: #5865f2; }
+        /* Yeni: Parmak izi uyarı stili */
+        #key-fingerprint-container { 
+            padding: 5px 10px; 
+            background: #222; 
+            border-bottom: 1px solid #444;
+            text-align: center;
+        }
+
+        /* Giriş Ekranı Tavsiye Metni (Turuncu ve Vurgulu) */
+        .recommendation {
+            color: #FFA500; /* Turuncu renk */
+            font-weight: bold; /* Vurgulu (Bold) */
+            font-size: 1.05rem; 
+        }
+
+        /* ✅ DÜZELTME: Kendi Mesaj Yazı Rengi (Yeşil) */
+        .self-message .message-content {
+            /* Arkaplanı sıfırla veya varsayılana bırak */
+            /* Burada sadece font rengini ayarlayacağız */
+        }
+        .self-message {
+             /* Mesajın içindeki metni hedef al */
+             color: #4CAF50; /* Canlı Yeşil */
+             align-self: flex-end; /* Sağ tarafa hizala */
+        }
+        /* Eğer message-text span'i varsa daha spesifik hedefleme yapabiliriz */
+        .self-message .message-content span {
+            color: #4CAF50 !important; /* Mesaj metnini yeşil yap */
+        }
+        /* Kullanıcı adını da yeşil yap */
+        .self-message strong, .self-message strong span {
+            color: #4CAF50 !important;
+        }
+
+        /* Kimlik Butonları */
+        .identity-actions {
+            display: flex; /* Butonları yan yana hizala */
+            gap: 10px;    /* Butonlar arasına boşluk koy */
+            margin-top: 15px; 
+            width: 80%; /* Ana giriş butonu ile aynı genişlikte tut */
+            margin-left: auto;
+            margin-right: auto;
+        }
+
+        .identity-actions button,
+        .identity-actions .import-label-as-button {
+            flex-grow: 1; /* Butonların genişliği eşit olsun */
+            background-color: #555; /* İkincil aksiyon için koyu renk */
+            color: white;
+            border: none;
+            padding: 10px 15px;
+            cursor: pointer;
+            border-radius: 5px;
+            font-size: 1rem;
+            font-weight: bold;
+            text-align: center;
+            line-height: 1.2; 
+            display: block; /* Label'ın button gibi davranması için */
+            box-sizing: border-box;
+            text-decoration: none;
+        }
     </style>
     <script src="/purify.min.js"></script>
 </head>
@@ -24,7 +85,9 @@
             <button id="submit-name" data-i18n="login_button"></button>
             <div class="identity-actions">
                 <button type="button" id="export-identity" data-i18n="export_identity_button"></button>
-                <label for="import-identity-input" class="import-label" data-i18n="import_identity_label"></label>
+                
+                <label for="import-identity-input" id="import-identity-trigger" class="import-label-as-button" data-i18n="import_identity_label"></label>
+                
                 <input type="file" id="import-identity-input" accept=".json" style="display: none;">
             </div>
         </div>
@@ -41,6 +104,9 @@
             <div id="header">
                 <h1 id="chat-title" data-i18n="chat_title_default"></h1>
                 
+                <div id="key-fingerprint-container" style="padding: 5px; background: #222; border-bottom: 1px solid #444;">
+                    </div>
+
                 <div id="lang-switcher">
                     <button id="lang-tr">TR</button>
                     <button id="lang-en">EN</button>
@@ -56,6 +122,6 @@
     </div>
     <script src="/sodium.js"></script>
     <script src="/socket.io/socket.io.js"></script>
-   <script type="module" src="/client.js?v=84"></script>
+   <script type="module" src="/client.js?v=87"></script>
 </body>
 </html>

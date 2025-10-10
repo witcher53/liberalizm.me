@@ -15,6 +15,7 @@
   "conversations_title": "Sohbetlerin",
   "sound_toggle_on": "Ses Açık",
   "sound_toggle_off": "Ses Kapalı",
+  "send_button": "Gönder",  
   "you_suffix": "(Sen)",
   "system_username": "Sistem",
   "log_undecryptable_message": "Şifreli bir mesaj alınamadı veya çözülemedi.",
@@ -22,5 +23,7 @@
   "error_creating_identity": "Kimlik oluşturulurken bir hata oluştu.",
   "alert_password_required": "Lütfen en az 8 karakterli bir parola girin.",
   "alert_wrong_password": "Yanlış parola! Lütfen tekrar deneyin.",
-  "alert_corrupt_identity": "Kaydedilmiş kimliğiniz bozuk görünüyor. Lütfen site verilerini temizleyip yeni bir kimlik oluşturun."
+  "alert_corrupt_identity": "Kaydedilmiş kimliğiniz bozuk görünüyor. Lütfen site verilerini temizleyip yeni bir kimlik oluşturun.",
+  "key_fingerprint_title": "Güvenlik Kodu (Anahtar Parmak İzi)",
+  "key_fingerprint_warning": "Bu kodu, partnerinizle harici bir kanaldan (telefon vb.) doğrulayın. Kodlar eşleşmiyorsa iletişiminiz tehlikeye girmiş demektir!"
 }

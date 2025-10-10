@@ -1,4 +1,4 @@
-// /public/ui.js (GÜNCEL SÜRÜM - Mesaj Silme Butonlu)
+// /public/ui.js (NİHAİ SÜRÜM - Kendi Online Durumunu Gösterme Düzeltmesi)
 
 function escapeHtml(str) {
     return DOMPurify.sanitize(str);
@@ -85,6 +85,7 @@ export function addLog(text, messagesEl, t) {
     addChatMessage({ username: t('system_username'), message: text, timestamp: new Date() }, messagesEl, localStorage.getItem('language'));
 }
 
+// ✅ DÜZELTME: Bu fonksiyonun export edildiğinden emin olundu.
 export function updateConversationOnlineStatus(publicKey, isOnline, conversationsDiv) {
     const userElement = conversationsDiv.querySelector(`p[data-public-key="${publicKey}"]`);
     if (userElement) {
@@ -106,7 +107,10 @@ export function renderUser(user, container, options) {
     const userElement = document.createElement('p');
     userElement.dataset.publicKey = user.publicKey;
 
-    if (isOnline) {
+    // Kendi kullanıcımız için her zaman online göstergeyi ekle.
+    const shouldShowOnline = isOnline || (identity && user.publicKey === identity.publicKey);
+
+    if (shouldShowOnline) {
         const indicatorSpan = document.createElement('span');
         indicatorSpan.className = 'online-indicator';
         indicatorSpan.textContent = '●';

@@ -1,4 +1,4 @@
-// /public/client.js (SON, EKSİKSİZ SÜRÜM - decryptPointer Hatası Düzeltildi)
+// /public/client.js (NİHAİ SÜRÜM - Ortak Gizli Kod Düzeltmesi)
 import * as Crypto from './crypto.js';
 import * as UI from './ui.js';
 import * as Auth from './auth.js';
@@ -61,6 +61,9 @@ function init() {
             chatTitle: document.getElementById('chat-title'),
             exportIdentityBtn: document.getElementById('export-identity'),
             importIdentityInput: document.getElementById('import-identity-input'),
+            importIdentityTrigger: document.getElementById('import-identity-trigger'),
+            // Anahtar parmak izini gösterecek DOM elemanı
+            keyFingerprintContainer: document.getElementById('key-fingerprint-container'),
         };
 
         let socket = null;
@@ -91,6 +94,20 @@ function init() {
             dom.button.disabled = false;
             const historyTarget = partner ? partner.publicKey : null;
             socket.emit('get conversation history', historyTarget);
+            
+            // ✅ Ortak Gizli Kod (Shared Secret) Gösterme Mantığı
+            if (dmPartner && dom.keyFingerprintContainer) {
+                // Hata Düzeltme: Yeni generateSharedSecret fonksiyonunu kendi ve partnerin anahtarıyla çağır.
+                const sharedSecret = Crypto.generateSharedSecret(identity.publicKey, dmPartner.publicKey);
+                
+                dom.keyFingerprintContainer.innerHTML = `
+                    <span style="font-weight:bold;">${t('key_fingerprint_title')}:</span> 
+                    <span style="font-family:monospace; color:#3a3;">${sharedSecret}</span>
+                    <span style="font-size:0.8em; display:block; color:#ff4d4d;">${t('key_fingerprint_warning')}</span>
+                `;
+            } else if (dom.keyFingerprintContainer) {
+                dom.keyFingerprintContainer.innerHTML = '';
+            }
         }
 
         function renderOnlineUserList() {
@@ -100,7 +117,8 @@ function init() {
                 if (identity && b.publicKey === identity.publicKey) return 1;
                 return a.username.localeCompare(b.username);
             });
-            sortedUsers.forEach(user => UI.renderUser(user, dom.onlineUsersDiv, { identity, t, onUserClick: activateChat, isOnline: true }));
+            // Hata Düzeltme: ui.js artık doğru çağrılabilir.
+            sortedUsers.forEach(user => UI.renderUser(user, dom.onlineUsersDiv, { identity, t, onUserClick: activateChat, isOnline: onlineUserMap.has(user.publicKey) }));
         }
 
         function setupSocketListeners() {
@@ -186,7 +204,14 @@ function init() {
             // --- BİTİŞ: 'private message' DÜZELTMESİ ---
             
             socket.on('chat message', (data) => { if (!dmPartner && identity && data.username !== identity.username) { playSound(); UI.addChatMessage({ ...data, isSelf: false }, dom.messages, localStorage.getItem('language')); } });
-            socket.on('new_conversation_partner', (partner) => { if (!dom.conversationsDiv.querySelector(`p[data-public-key="${partner.publicKey}"]`) && partner) { UI.renderUser(partner, dom.conversationsDiv, { identity, t, onUserClick: activateChat, isOnline: onlineUserMap.has(partner.publicKey) }); UI.updateConversationOnlineStatus(partner.publicKey, onlineUserMap.has(partner.publicKey), dom.conversationsDiv); } });
+            socket.on('new_conversation_partner', (partner) => { 
+                // Tekrar eklenmeyi önlemek için sağlam kontrol
+                const exists = dom.conversationsDiv.querySelector(`p[data-public-key="${partner.publicKey}"]`);
+                if (!exists && partner && partner.publicKey !== identity.publicKey) { 
+                    UI.renderUser(partner, dom.conversationsDiv, { identity, t, onUserClick: activateChat, isOnline: onlineUserMap.has(partner.publicKey) }); 
+                    UI.updateConversationOnlineStatus(partner.publicKey, onlineUserMap.has(partner.publicKey), dom.conversationsDiv); 
+                } 
+            });
             
             socket.on('private message deleted', (messageId) => {
                 const messageElement = dom.messages.querySelector(`li[data-message-id="${messageId}"]`);
@@ -196,7 +221,7 @@ function init() {
             });
         }
 
-        // ... (startChat, export/import, event listener'lar aynı kalıyor)
+        // ... (geri kalan kod aynı)
         async function startChat(id) {
             identity = id;
             return new Promise((resolve, reject) => {
@@ -368,7 +393,8 @@ function init() {
         dom.exportIdentityBtn.addEventListener('click', exportIdentity);
         dom.importIdentityInput.addEventListener('change', importIdentity);
 
-        existingIdentity = Auth.checkIdentity();
+
+           existingIdentity = Auth.checkIdentity();
     })();
 }
 

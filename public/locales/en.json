@@ -24,5 +24,7 @@
   "general_chat_title": "General Chat",
   "log_undecryptable_message": "[An encrypted message could not be decrypted.]",
   "system_username": "System",
-  "alert_corrupt_identity": "Your saved identity appears to be corrupt. Please clear your site data and create a new identity."
+  "alert_corrupt_identity": "Your saved identity appears to be corrupt. Please clear your site data and create a new identity.",
+  "key_fingerprint_title": "Partner Key Code",
+  "key_fingerprint_warning": "COMPARE THIS CODE with the code your partner reads out to you. If codes do not match, DO NOT TRUST the communication."
 }
