@@ -1,6 +1,5 @@
 // /var/www/liberalizm.me/index.js (CSP - Nonce ile GÜNCELLENMİŞ Ana Sunucu Dosyası)
 
-require('dotenv').config();
 const express = require('express');
 const http = require('http');
 const socketIo = require('socket.io');

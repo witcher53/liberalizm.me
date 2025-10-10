@@ -4,6 +4,35 @@ function escapeHtml(str) {
     return DOMPurify.sanitize(str);
 }
 
+// ✅ YENİ: Dosyayı deşifre etme ve blob URL oluşturma fonksiyonu
+async function decryptAndCreateBlobUrl(fileUrl, fileKeyBase64) {
+    // 1. Şifreli Dosyayı CDN'den indir (ArrayBuffer olarak)
+    const response = await fetch(fileUrl);
+    if (!response.ok) throw new Error(`Dosya indirme başarısız: HTTP ${response.status}`);
+    const encryptedFileBuffer = await response.arrayBuffer();
+    const encryptedFileBytes = new Uint8Array(encryptedFileBuffer);
+    
+    // 2. Şifreleme Anahtarını (FileKey) çıkar
+    const fileKey = sodium.from_base64(fileKeyBase64);
+    
+    // 3. Dosyadan Nonce ve Şifreli Metin/MAC'i çıkar (Nonce, client.js'te başa eklenmişti)
+    const NONCE_BYTES = 24; // XChaCha20 için nonce boyutu 24 byte'tır
+    const nonce = encryptedFileBytes.slice(0, NONCE_BYTES); // Nonce'ı dosyanın başından oku
+    const ciphertextWithMac = encryptedFileBytes.slice(NONCE_BYTES);
+
+    // 4. Dosyayı deşifre et
+    const decryptedFileBytes = sodium.crypto_aead_xchacha20poly1305_ietf_decrypt(
+        ciphertextWithMac, 
+        null, 
+        nonce, 
+        fileKey
+    );
+    
+    // 5. Blob oluştur ve URL döndür
+    const fileBlob = new Blob([decryptedFileBytes]); // Tipi tarayıcıya bırak
+    return URL.createObjectURL(fileBlob);
+}
+
 export function addChatMessage(data, messagesEl, lang) {
     const item = document.createElement('li');
     if (data._id) {
@@ -34,34 +63,73 @@ export function addChatMessage(data, messagesEl, lang) {
 
     const messageText = document.createElement('span');
     
-    // ✅ YENİ: Mesaj tipi kontrolü
-    if (data.messageType === 'image' && data.message && data.message.startsWith('http')) {
-        // Eğer mesaj tipi resimse, şifrelenmiş resim url'sini göster
-        const img = document.createElement('img');
-        img.src = data.message;
-        img.alt = 'Şifreli Resim';
-        img.style.maxWidth = '300px'; 
-        img.style.maxHeight = '300px'; 
-        img.style.display = 'block';
-        img.style.marginTop = '5px';
-
-        // Resmi bir konteynere sar
-        const imageWrapper = document.createElement('div');
-        imageWrapper.appendChild(img);
+    // ✅ GÜNCELLEME: Mesaj tipi kontrolü ve asenkron görüntüleme
+    if (data.messageType === 'image' && data.message) {
         
-        // Resim etiketini mesaj içeriğine ekle
-        messageText.innerHTML = ''; // Metin alanını temizle
-        messageText.appendChild(imageWrapper);
+        let fileUrl, encryptedKeyBase64;
+
+        if (typeof data.message === 'string') {
+            [fileUrl, encryptedKeyBase64] = data.message.split('::');
+        } else {
+            // Bu sadece history için geçerli olabilir (şu anki client.js yapısında buraya gelmemeli)
+             fileUrl = data.message.fileUrl;
+             encryptedKeyBase64 = data.message.encryptedKeyBase64;
+        }
+
+        // Yer tutucu ekle
+        messageText.textContent = data.t('log_upload_start'); 
+        messageContent.appendChild(usernameStrong);
+        messageContent.appendChild(messageText);
+        item.appendChild(messageContent);
+        messagesEl.appendChild(item); // Mesajı hemen ekle
+        
+        // Bu veriler client.js'ten geliyor:
+        const recipientPKBuffer = sodium.from_base64(data.identity.publicKey);
+        const privateKeyBuffer = sodium.from_base64(data.identity.privateKey);
+
+        if (fileUrl && encryptedKeyBase64) {
+            // 1. Dosya şifreleme anahtarını (FileKey) deşifre et
+            try {
+                const fileKeyBase64 = sodium.to_string(sodium.crypto_box_seal_open(sodium.from_base64(encryptedKeyBase64), recipientPKBuffer, privateKeyBuffer));
+                
+                // 2. Resmi indir, deşifre et ve görüntüle
+                decryptAndCreateBlobUrl(fileUrl, fileKeyBase64)
+                    .then(blobUrl => {
+                        const img = document.createElement('img');
+                        img.src = blobUrl;
+                        img.alt = 'Deşifrelenmiş Resim';
+                        img.style.maxWidth = '300px'; 
+                        img.style.maxHeight = '300px'; 
+                        img.style.display = 'block';
+                        img.style.marginTop = '5px';
+                        img.style.borderRadius = '8px';
+                        img.style.cursor = 'pointer';
+                        img.onclick = () => window.open(blobUrl, '_blank');
+                        
+                        messageText.innerHTML = ''; 
+                        messageText.appendChild(img);
+                    })
+                    .catch(err => {
+                        console.error("Resim deşifre/görüntüleme hatası:", err);
+                        messageText.textContent = data.t('log_image_decrypt_failed'); 
+                    });
+
+            } catch(e) {
+                console.error("Anahtar deşifre hatası:", e);
+                messageText.textContent = data.t('log_image_decrypt_failed');
+            }
+        }
+        
     } else {
         // Varsayılan: Metin mesajını göster
         messageText.textContent = data.message || '';
+        messageContent.appendChild(usernameStrong);
+        messageContent.appendChild(messageText);
+        item.appendChild(messageContent);
+        messagesEl.appendChild(item);
     }
-
-    messageContent.appendChild(usernameStrong);
-    messageContent.appendChild(messageText);
-
-    item.appendChild(messageContent);
-
+    
+    // Zaman damgası ve silme butonu mantığı
     const timestampSpan = document.createElement('span');
     timestampSpan.className = 'timestamp';
 
@@ -78,7 +146,6 @@ export function addChatMessage(data, messagesEl, lang) {
         timestampSpan.textContent = '';
     }
 
-    // --- BAŞLANGIÇ: SİLME BUTONU EKLEME ---
     const controlsContainer = document.createElement('div');
     controlsContainer.className = 'message-controls';
     controlsContainer.appendChild(timestampSpan);
@@ -93,9 +160,7 @@ export function addChatMessage(data, messagesEl, lang) {
     }
     
     item.appendChild(controlsContainer);
-    // --- BİTİŞ: SİLME BUTONU EKLEME ---
-    
-    messagesEl.appendChild(item);
+
     setTimeout(() => {
         messagesEl.scrollTop = messagesEl.scrollHeight;
     }, 10);

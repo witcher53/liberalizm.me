@@ -242,7 +242,7 @@ function init() {
                         const fileKey = sodium.randombytes_buf(32);
                         
                         // 3. Dosyayı Anahtar ile şifrele (XChaCha20-Poly1305)
-                        const nonce = sodium.randombytes_buf(sodium.crypto_aead_xchacha20poly1305_ietf_NPUBBYTES);
+                        const nonce = sodium.randombytes_buf(24); // XChaCha20 için nonce boyutu 24 byte'tır
                         // Encrypted dosya buffer'ı: Nonce + Şifreli Metin + MAC
                         const encryptedFile = sodium.crypto_aead_xchacha20poly1305_ietf_encrypt(fileBytes, null, nonce, fileKey);
                         
