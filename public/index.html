@@ -97,6 +97,10 @@
     
     <div id="main-container" style="display: none;">
         <div id="user-list-container">
+            <div id="search-container">
+                <input type="text" id="user-search-input" data-i18n-placeholder="search_user_placeholder">
+                <div id="search-results"></div>
+            </div>
             <h3 data-i18n="conversations_title">Sohbetler</h3>
             <div id="conversations"></div>
             <hr>
@@ -132,6 +136,6 @@
 
     <script src="/sodium.js"></script>
     <script src="/socket.io/socket.io.js"></script>
-    <script type="module" src="/client.js?v=55"></script>
+    <script type="module" src="/client.js?v=65"></script>
 </body>
 </html>

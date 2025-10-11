@@ -29,6 +29,7 @@ function initializeSocketListeners(io, redisClient) {
     const rateLimiter = new RateLimiterMemory({ points: 10, duration: 1 });
     const messageLimiter = new RateLimiterMemory({ points: 5, duration: 2 });
     const privateMessageLimiter = new RateLimiterMemory({ points: 10, duration: 2 });
+    const searchLimiter = new RateLimiterMemory({ points: 10, duration: 5 }); // Arama için yeni limitleyici
     const NONCE_EXPIRE_SECONDS = 300;
 
     const GENERAL_CHAT_REDIS_KEY = 'general_chat_history';
@@ -120,6 +121,35 @@ function initializeSocketListeners(io, redisClient) {
                 socket.emit('conversations list', partners);
             } catch (err) {
                 console.error(`[HATA] 'get conversations': ${err.message}`, err);
+            }
+        });
+
+        // YENİ: KULLANICI ARAMA EVENT'İ
+        socket.on('search users', async (query) => {
+            if (!socket.isAuthenticated) return;
+            try {
+                await searchLimiter.consume(socket.publicKey);
+
+                const searchQuery = String(query || '').trim();
+                if (searchQuery.length < 1 || searchQuery.length > 15) {
+                    socket.emit('search results', []);
+                    return;
+                }
+
+                // Regex enjeksiyonunu önlemek için özel karakterleri escape'liyoruz.
+                const escapedQuery = searchQuery.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+                const users = await usersCollection.find({
+                    username: { $regex: `^${escapedQuery}`, $options: 'i' }, // 'i' -> case-insensitive
+                    publicKey: { $ne: socket.publicKey } // Kendisini arama sonuçlarında gösterme
+                }).limit(10).project({ username: 1, publicKey: 1, _id: 0 }).toArray();
+                
+                socket.emit('search results', users);
+            } catch (err) {
+                if (!err.msBeforeNext) {
+                     console.error(`[HATA] 'search users': ${err.message}`, err);
+                }
+                socket.emit('search results', []);
             }
         });
 

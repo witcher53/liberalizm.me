@@ -65,6 +65,9 @@ function init() {
             keyFingerprintContainer: document.getElementById('key-fingerprint-container'),
             fileInput: document.getElementById('file-input'),
             fileUploadLabel: document.getElementById('file-upload-label'),
+            // YENİ DOM ELEMENTLERİ
+            userSearchInput: document.getElementById('user-search-input'),
+            searchResultsDiv: document.getElementById('search-results'),
         };
 
         let socket = null;
@@ -320,6 +323,28 @@ function init() {
                     messageElement.remove();
                 }
             });
+
+            // YENİ: ARAMA SONUÇLARI İÇİN LISTENER
+            socket.on('search results', (users) => {
+                dom.searchResultsDiv.innerHTML = '';
+                if (users.length > 0) {
+                    users.forEach(user => {
+                        const item = document.createElement('div');
+                        item.className = 'search-result-item';
+                        // XSS'e karşı DOMPurify ile kullanıcı adını temizliyoruz.
+                        item.innerHTML = DOMPurify.sanitize(user.username);
+                        item.onclick = () => {
+                            activateChat(user, user.username);
+                            dom.userSearchInput.value = '';
+                            dom.searchResultsDiv.style.display = 'none';
+                        };
+                        dom.searchResultsDiv.appendChild(item);
+                    });
+                    dom.searchResultsDiv.style.display = 'block';
+                } else {
+                    dom.searchResultsDiv.style.display = 'none';
+                }
+            });
         }
 
         async function encryptAndUploadFile(file) {
@@ -532,6 +557,29 @@ function init() {
                 dom.input.disabled = false;
             }
         });
+        
+        // YENİ: ARAMA İÇİN EVENT LISTENER'LAR
+        let searchTimeout;
+        dom.userSearchInput.addEventListener('keyup', (e) => {
+            clearTimeout(searchTimeout);
+            const query = dom.userSearchInput.value.trim();
+            if (query.length > 0) {
+                // Her tuş vuruşunda sunucuyu meşgul etmemek için küçük bir gecikme ekliyoruz.
+                searchTimeout = setTimeout(() => {
+                    socket.emit('search users', query);
+                }, 250);
+            } else {
+                dom.searchResultsDiv.style.display = 'none';
+            }
+        });
+        
+        // Arama kutusu dışına tıklandığında sonuçları gizle
+        document.addEventListener('click', (e) => {
+            if (!dom.searchResultsDiv.contains(e.target) && e.target !== dom.userSearchInput) {
+                dom.searchResultsDiv.style.display = 'none';
+            }
+        });
+
 
         const handleLoginSubmit = () => {
             if (existingIdentity) {

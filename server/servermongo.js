@@ -9,6 +9,8 @@ async function createAndVerifyIndexes() {
         await dmMessagesCollection.createIndex({ senderFingerprint: 1 });
         await dmMessagesCollection.createIndex({ recipientFingerprint: 1 });
         await usersCollection.createIndex({ "publicKey": 1 }, { unique: true });
+        // YENİ: Kullanıcı adı aramalarını hızlandırmak için indeks
+        await usersCollection.createIndex({ "username": 1 }); 
         console.log("✅ [Sunucu] Koleksiyon İndeksleri başarıyla oluşturuldu/doğrulandı.");
     } catch (err) {
         if (err.code === 85 || err.codeName === 'IndexOptionsConflict') {
@@ -47,3 +49,4 @@ module.exports = {
     connectToMongo,
     getCollections
 };
+
