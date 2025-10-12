@@ -1,20 +1,19 @@
-// /server/serversocket.js (ioredis ile Çalışan Nihai Kararlı Sürüm)
+// /server/serversocket.js (Logger Kodları Kaldırıldı, User Enumeration Koruması Duruyor)
 
 const { RateLimiterRedis } = require('rate-limiter-flexible');
 const nacl = require('tweetnacl');
 const { createAdapter } = require('@socket.io/redis-adapter');
 const { ObjectId } = require('mongodb');
-const Redis = require('ioredis'); // ioredis'i import ediyoruz
+const Redis = require('ioredis');
 
 const Crypto = require('./servercrypto.js');
 const Mongo = require('./servermongo.js');
 
 const GENERAL_CHAT_ROOM = 'general_chat_room';
 
-// ioredis ile setup fonksiyonu çok daha basit
 async function setupRedisAdapter(io) {
     console.log('[Sunucu] ioredis Adapter kurulumu deneniyor...');
-    const redisClient = new Redis(); // Yeni ioredis istemcisi
+    const redisClient = new Redis();
     const pubClient = redisClient.duplicate();
     const subClient = redisClient.duplicate();
 
@@ -26,7 +25,6 @@ async function setupRedisAdapter(io) {
 function initializeSocketListeners(io, redisClient) {
     const { dmMessagesCollection, usersCollection } = Mongo.getCollections();
 
-    // RateLimiterRedis, ioredis ile kutudan çıktığı gibi uyumludur.
     const limiterOptions = {
         storeClient: redisClient,
         keyPrefix: 'limit',
@@ -51,7 +49,6 @@ function initializeSocketListeners(io, redisClient) {
             if (!publicKey || !signature || !nonce) return next(new Error('Kimlik doğrulama hatası: Bilgiler eksik.'));
 
             const nonceKey = `nonce:${nonce}`;
-            // ioredis promise tabanlı olduğu için kod daha temiz
             const nonceExists = await redisClient.get(nonceKey);
             if (nonceExists) return next(new Error('Tekrar saldırısı tespit edildi.'));
 
@@ -72,7 +69,7 @@ function initializeSocketListeners(io, redisClient) {
                 console.warn(`[RATE LIMIT] IP Engellendi: ${socket.handshake.address}`);
                 return next(new Error('Çok fazla istek.'));
             }
-            console.error("!!! KRİTİK AUTH MIDDLEWARE HATASI !!!", e);
+            console.error("!!! KRİTİK AUTH MIDDLEWARE HATASI !!!", { message: e.message, ip: socket.handshake.address });
             return next(new Error('Sunucu yapılandırma hatası. Lütfen tekrar deneyin.'));
         }
     });
@@ -143,14 +140,24 @@ function initializeSocketListeners(io, redisClient) {
             try {
                 await searchLimiter.consume(socket.publicKey);
                 const searchQuery = String(query || '').trim();
-                if (searchQuery.length < 1 || searchQuery.length > 15) {
-                    socket.emit('search results', []); return;
+
+                if (searchQuery.length < 3) {
+                    socket.emit('search results', []);
+                    return;
                 }
+                if (searchQuery.length > 15) {
+                    socket.emit('search results', []);
+                    return;
+                }
+                
                 const escapedQuery = searchQuery.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
                 const users = await usersCollection.find({
                     username: { $regex: `^${escapedQuery}`, $options: 'i' },
                     publicKey: { $ne: socket.publicKey }
-                }).limit(10).project({ username: 1, publicKey: 1, _id: 0 }).toArray();
+                })
+                .limit(5)
+                .project({ username: 1, publicKey: 1, _id: 0 }).toArray();
+                
                 socket.emit('search results', users);
             } catch (err) {
                 if (!err.msBeforeNext) console.error(`[HATA] 'search users': ${err.message}`, err);
@@ -274,7 +281,7 @@ function initializeSocketListeners(io, redisClient) {
             for (const publicKey of onlineKeys) {
                 const heartbeatExists = await redisClient.exists(`user:${publicKey}:heartbeat`);
                 if (!heartbeatExists) {
-                    console.log(`[Temizlik] Hayalet kullanıcı siliniyor: ${publicKey}`);
+                    console.warn(`[Temizlik] Hayalet kullanıcı siliniyor: ${publicKey}`);
                     await redisClient.srem('online_users_set', publicKey);
                     io.emit('user disconnected', { publicKey: publicKey });
                 }
