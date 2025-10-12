@@ -1,690 +1,284 @@
-// /public/client.js (Metadata Padding Eklenmiş Tam Sürüm)
+// /public/client.js (Zamanlama Korumalı Tam Sürüm)
 
-import * as Crypto from './crypto.js';
-import * as UI from './ui.js';
-import * as Auth from './auth.js';
+// DOM Elementlerini Seç
+const chatHistory = document.getElementById('chat-history');
+const messageInput = document.getElementById('message-input');
+const sendButton = document.getElementById('send-button');
+const userList = document.getElementById('user-list');
+const searchInput = document.getElementById('search-input');
+const searchResults = document.getElementById('search-results');
+const currentChatHeader = document.getElementById('current-chat-header');
+const leaveGeneralChatButton = document.getElementById('leave-general-chat');
+const generalChatRoom = document.getElementById('general-chat-room');
 
-// --- BAŞLANGIÇ: Metadata Padding Fonksiyonu ---
-/**
- * Mesajları standart boyutlara tamamlayarak metadata sızıntısını önler.
- * @param {string} messageText - Şifrelenecek orijinal mesaj.
- * @returns {string} - Standart bir boyuta getirilmiş mesaj.
- */
-function padMessage(messageText) {
-    const textEncoder = new TextEncoder();
-    const messageBytes = textEncoder.encode(messageText);
-    
-    // Standart blok boyutları (byte cinsinden)
-    const sizes = [128, 256, 512, 1024, 2048, 4096];
-    
-    // Mesajı sığdırabileceğimiz en küçük standart boyutu bul
-    const targetSize = sizes.find(s => s > messageBytes.length) || sizes[sizes.length - 1];
-    
-    // Eğer mesaj zaten çok uzunsa, en büyük boyuta kırp (bu nadir bir durum)
-    if (messageBytes.length >= targetSize) {
-        return messageText;
-    }
+// Socket.IO ve Diğer Değişkenler
+let socket;
+let currentRecipientPublicKey = null;
+let conversations = new Map();
+let onlineUsers = [];
+let lastMessageTimestamps = new Map();
+const MESSAGE_DEBOUNCE_TIME = 2000;
 
-    // Gerekli dolgu miktarını hesapla
-    const paddingNeeded = targetSize - messageBytes.length;
-    
-    // Anlamsız boşluk karakteri (\u0000) ile doldur
-    const padding = '\0'.repeat(paddingNeeded);
-    
-    return messageText + padding;
+// Çeviri Fonksiyonu
+const translations = {
+    'general_chat': 'Genel Sohbet',
+    'you': 'Siz',
+};
+function t(key) {
+    return translations[key] || key;
 }
-// --- BİTİŞ: Metadata Padding Fonksiyonu ---
 
+// ============== BAŞLANGIÇ: Ana Fonksiyonlar ==============
 
-function init() {
-    (async () => {
-        let translations = {};
-        async function setLanguage(lang) {
-            try {
-                const response = await fetch(`/locales/${lang}.json`);
-                translations = await response.json();
-            } catch (error) {
-                console.error(`Could not load language file: ${lang}`, error);
-                translations = {};
-            }
-            document.querySelectorAll('[data-i18n]').forEach(el => {
-                const key = el.getAttribute('data-i18n');
-                if (translations[key]) {
-                    if (el.tagName === 'BUTTON' || el.tagName === 'LABEL') {
-                        el.textContent = translations[key];
-                    } else {
-                        el.innerHTML = translations[key];
-                    }
-                }
-            });
-            document.querySelectorAll('[data-i18n-placeholder]').forEach(el => {
-                const key = el.getAttribute('data-i18n-placeholder');
-                if (translations[key]) el.setAttribute('placeholder', translations[key]);
-            });
-            document.title = translations['page_title'] || 'Chat';
-            localStorage.setItem('language', lang);
-            document.getElementById('lang-tr').classList.toggle('active', lang === 'tr');
-            document.getElementById('lang-en').classList.toggle('active', lang === 'en');
-        }
-        function t(key) { return translations[key] || key; }
-        const preferredLang = localStorage.getItem('language') || (navigator.language.startsWith('tr') ? 'tr' : 'en');
-        await setLanguage(preferredLang);
-        document.getElementById('lang-en').addEventListener('click', () => setLanguage('en'));
-        document.getElementById('lang-tr').addEventListener('click', () => setLanguage('tr'));
-        
-        if (typeof sodium === 'undefined' || typeof io === 'undefined' || typeof DOMPurify === 'undefined') {
-            document.body.innerHTML = `<h1>${t('error_libsodium')}</h1>`;
+/**
+ * Socket.IO bağlantısını ve olay dinleyicilerini başlatır.
+ */
+async function initializeSocket() {
+    try {
+        const authData = await Auth.getAuthData();
+        if (!authData) {
+            console.error("Kimlik doğrulama bilgileri alınamadı. Sunucuya bağlanılamıyor.");
+            UI.showAuthScreen();
             return;
         }
-        await sodium.ready;
 
-        const dom = {
-            messages: document.getElementById('messages'),
-            form: document.getElementById('form'),
-            input: document.getElementById('input'),
-            button: document.querySelector('#form button'),
-            loginOverlay: document.getElementById('login-overlay'),
-            loginBox: document.getElementById('login-box'),
-            nameInput: document.getElementById('name-input'),
-            passwordInput: document.getElementById('password-input'),
-            submitNameBtn: document.getElementById('submit-name'),
-            mainContainer: document.getElementById('main-container'),
-            soundToggle: document.getElementById('sound-toggle'),
-            conversationsDiv: document.getElementById('conversations'),
-            onlineUsersDiv: document.getElementById('online-users'),
-            chatTitle: document.getElementById('chat-title'),
-            exportIdentityBtn: document.getElementById('export-identity'),
-            importIdentityInput: document.getElementById('import-identity-input'),
-            keyFingerprintContainer: document.getElementById('key-fingerprint-container'),
-            fileInput: document.getElementById('file-input'),
-            fileUploadLabel: document.getElementById('file-upload-label'),
-            userSearchInput: document.getElementById('user-search-input'),
-            searchResultsDiv: document.getElementById('search-results'),
-        };
-
-        let socket = null;
-        let identity = null;
-        let isMuted = true;
-        let dmPartner = null;
-        let onlineUserMap = new Map();
-
-        function playSound() { if (isMuted) return; new Audio('/notification.mp3').play().catch(() => {}); }
-
-        function activateChat(partner, title) {
-            const currentActive = dom.conversationsDiv.querySelector('.active-chat');
-            if (currentActive) currentActive.classList.remove('active-chat');
-            if (partner && partner.publicKey) {
-                const userElement = dom.conversationsDiv.querySelector(`p[data-public-key="${partner.publicKey}"]`);
-                if (userElement) {
-                    userElement.classList.add('active-chat');
-                    userElement.classList.remove('new-message-indicator');
-                }
-            } else {
-                const generalChatElement = dom.conversationsDiv.querySelector('p:first-child');
-                if (generalChatElement) generalChatElement.classList.add('active-chat');
-            }
-            dmPartner = partner;
-            dom.chatTitle.textContent = title;
-            dom.input.placeholder = t('placeholder_write_message');
-            dom.input.disabled = false;
-            dom.button.disabled = false;
-            
-            if (dmPartner) {
-                dom.fileUploadLabel.style.display = 'block';
-            } else {
-                dom.fileUploadLabel.style.display = 'none';
-                dom.fileInput.value = '';
-            }
-
-            const historyTarget = partner ? partner.publicKey : null;
-            socket.emit('get conversation history', historyTarget);
-            
-            if (dmPartner && dom.keyFingerprintContainer) {
-                const sharedSecret = Crypto.generateSharedSecret(identity.publicKey, dmPartner.publicKey);
-                
-                dom.keyFingerprintContainer.innerHTML = `
-                    <span style="font-weight:bold;">${t('key_fingerprint_title')}:</span> 
-                    <span style="font-family:monospace; color:#3a3;">${sharedSecret}</span>
-                    <span style="font-size:0.8em; display:block; color:#ff4d4d;">${t('key_fingerprint_warning')}</span>
-                `;
-            } else if (dom.keyFingerprintContainer) {
-                dom.keyFingerprintContainer.innerHTML = '';
-            }
-        }
-
-        function renderOnlineUserList() {
-            dom.onlineUsersDiv.innerHTML = '';
-            const sortedUsers = Array.from(onlineUserMap.values()).sort((a, b) => {
-                if (identity && a.publicKey === identity.publicKey) return -1;
-                if (identity && b.publicKey === identity.publicKey) return 1;
-                return a.username.localeCompare(b.username);
-            });
-            sortedUsers.forEach(user => UI.renderUser(user, dom.onlineUsersDiv, { identity, t, onUserClick: activateChat, isOnline: onlineUserMap.has(user.publicKey) }));
-        }
-
-        function setupSocketListeners() {
-            socket.on('initial user list', (users) => { 
-                onlineUserMap.clear(); 
-                if (users) { 
-                    users.forEach(user => onlineUserMap.set(user.publicKey, user)); 
-                } 
-                renderOnlineUserList(); 
-            });
-            
-            socket.on('user connected', (user) => { 
-                onlineUserMap.set(user.publicKey, user); 
-                renderOnlineUserList(); 
-                UI.updateConversationOnlineStatus(user.publicKey, true, dom.conversationsDiv); 
-            });
-            
-            socket.on('user disconnected', (data) => { 
-                if (onlineUserMap.has(data.publicKey)) { 
-                    onlineUserMap.delete(data.publicKey); 
-                    renderOnlineUserList(); 
-                    UI.updateConversationOnlineStatus(data.publicKey, false, dom.conversationsDiv); 
-                } 
-            });
-            
-            socket.on('conversations list', (partners) => {
-                dom.conversationsDiv.innerHTML = '';
-                const generalChat = document.createElement('p');
-                generalChat.innerHTML = `<strong>${t('general_chat_title')}</strong>`;
-                generalChat.style.cursor = 'pointer';
-                generalChat.onclick = () => activateChat(null, t('general_chat_title'));
-                dom.conversationsDiv.appendChild(generalChat);
-                if (partners) partners.forEach(user => UI.renderUser(user, dom.conversationsDiv, { identity, t, onUserClick: activateChat, isOnline: onlineUserMap.has(user.publicKey) }));
-                activateChat(null, t('general_chat_title'));
-            });
-            
-            socket.on('conversation history', (data) => {
-                dom.messages.innerHTML = '';
-                if (!data || !data.history) return;
-                
-                data.history.forEach(msg => {
-                    if (!data.partnerPublicKey) { 
-                        UI.addChatMessage({ 
-                            ...msg, 
-                            isSelf: msg.username === identity.username, 
-                            messageType: msg.messageType || 'text'
-                        }, dom.messages, localStorage.getItem('language')); 
-                        return; 
-                    }
-                    
-                    const isSelf = (msg.senderPublicKey === identity.publicKey);
-                    let ciphertextToDecrypt = null;
-
-                    if (isSelf && msg.ciphertext_for_sender) {
-                        ciphertextToDecrypt = msg.ciphertext_for_sender;
-                    } else if (!isSelf && msg.ciphertext_for_recipient) {
-                        ciphertextToDecrypt = msg.ciphertext_for_recipient;
-                    }
-                    
-                    if (ciphertextToDecrypt) { 
-                        try {
-                            const messageType = msg.messageType || 'text';
-                            
-                            if (messageType === 'text') {
-                                const recipientPKBuffer = sodium.from_base64(identity.publicKey);
-                                const privateKeyBuffer = sodium.from_base64(identity.privateKey);
-                                const decrypted = sodium.to_string(
-                                    sodium.crypto_box_seal_open(
-                                        sodium.from_base64(ciphertextToDecrypt), 
-                                        recipientPKBuffer, 
-                                        privateKeyBuffer
-                                    )
-                                ); 
-                                // Gelen padding'i temizle
-                                const cleanMessage = decrypted.replace(/\0/g, '');
-                                const senderUsername = isSelf ? identity.username : (dmPartner?.username || onlineUserMap.get(data.partnerPublicKey)?.username || 'Bilinmeyen'); 
-                                
-                                UI.addChatMessage({ 
-                                    _id: msg._id, 
-                                    username: senderUsername, 
-                                    message: cleanMessage, 
-                                    timestamp: msg.timestamp, 
-                                    isSelf: isSelf, 
-                                    isEncrypted: true, 
-                                    messageType: 'text'
-                                }, dom.messages, localStorage.getItem('language')); 
-                            }
-                            else if (messageType === 'image') {
-                                const senderUsername = isSelf ? identity.username : (dmPartner?.username || onlineUserMap.get(data.partnerPublicKey)?.username || 'Bilinmeyen');
-                                
-                                UI.addChatMessage({ 
-                                    _id: msg._id, 
-                                    username: senderUsername, 
-                                    message: ciphertextToDecrypt,
-                                    timestamp: msg.timestamp, 
-                                    isSelf: isSelf, 
-                                    isEncrypted: true, 
-                                    messageType: 'image',
-                                    identity: identity,
-                                    privateKey: identity.privateKey
-                                }, dom.messages, localStorage.getItem('language')); 
-                            }
-                        } catch (e) { 
-                            UI.addLog(t('log_undecryptable_message'), dom.messages, t); 
-                        } 
-                    } else { 
-                        UI.addLog(t('log_undecryptable_message'), dom.messages, t); 
-                    }
-                });
-            });
-
-            socket.on('private message', (msg) => {
-                if (document.querySelector(`li[data-message-id="${msg._id}"]`)) return;
-
-                const isSelf = (msg.senderPublicKey === identity.publicKey);
-                const partnerPK = isSelf ? msg.recipientPublicKey : msg.senderPublicKey;
-                
-                const isFromCurrent = dmPartner && partnerPK === dmPartner.publicKey;
-                
-                if (isFromCurrent) {
-                    const ciphertext = isSelf ? msg.ciphertext_for_sender : msg.ciphertext_for_recipient;
-                    const messageType = msg.messageType || 'text';
-                    
-                    try {
-                        if (messageType === 'text') {
-                            const recipientPKBuffer = sodium.from_base64(identity.publicKey);
-                            const privateKeyBuffer = sodium.from_base64(identity.privateKey);
-                            const decrypted = sodium.to_string(
-                                sodium.crypto_box_seal_open(
-                                    sodium.from_base64(ciphertext), 
-                                    recipientPKBuffer, 
-                                    privateKeyBuffer
-                                )
-                            ); 
-                            // Gelen padding'i temizle
-                            const cleanMessage = decrypted.replace(/\0/g, '');
-                            const senderUsername = isSelf ? identity.username : (dmPartner?.username || 'Bilinmeyen');
-                            playSound(); 
-                            
-                            UI.addChatMessage({ 
-                                _id: msg._id, 
-                                username: senderUsername, 
-                                message: cleanMessage, 
-                                timestamp: new Date(), 
-                                isSelf: isSelf, 
-                                isEncrypted: true, 
-                                messageType: 'text'
-                            }, dom.messages, localStorage.getItem('language')); 
-                        }
-                        else if (messageType === 'image') {
-                            const senderUsername = isSelf ? identity.username : (dmPartner?.username || 'Bilinmeyen');
-                            playSound();
-                            
-                            UI.addChatMessage({ 
-                                _id: msg._id, 
-                                username: senderUsername, 
-                                message: ciphertext,
-                                timestamp: new Date(), 
-                                isSelf: isSelf, 
-                                isEncrypted: true, 
-                                messageType: 'image',
-                                identity: identity,
-                                privateKey: identity.privateKey
-                            }, dom.messages, localStorage.getItem('language')); 
-                        }
-                    } catch (e) { 
-                        UI.addLog(t('log_undecryptable_message'), dom.messages, t); 
-                    }
-                } else if (!isSelf) { 
-                    const userEl = document.querySelector(`p[data-public-key="${msg.senderPublicKey}"]`); 
-                    if (userEl) { 
-                        userEl.classList.add('new-message-indicator'); 
-                        playSound(); 
-                    } 
-                }
-            });
-            
-            socket.on('chat message', (data) => { 
-                if (!dmPartner && identity && data.username !== identity.username) { 
-                    playSound(); 
-                    UI.addChatMessage({ ...data, isSelf: false }, dom.messages, localStorage.getItem('language')); 
-                } 
-            });
-            
-            socket.on('new_conversation_partner', (partner) => { 
-                if (!dom.conversationsDiv.querySelector(`p[data-public-key="${partner.publicKey}"]`) && partner) { 
-                    UI.renderUser(partner, dom.conversationsDiv, { identity, t, onUserClick: activateChat, isOnline: onlineUserMap.has(partner.publicKey) }); 
-                    UI.updateConversationOnlineStatus(partner.publicKey, onlineUserMap.has(partner.publicKey), dom.conversationsDiv); 
-                } 
-            });
-            
-            socket.on('private message deleted', (messageId) => {
-                const messageElement = dom.messages.querySelector(`li[data-message-id="${messageId}"]`);
-                if (messageElement) {
-                    messageElement.remove();
-                }
-            });
-
-            socket.on('search results', (users) => {
-                dom.searchResultsDiv.innerHTML = '';
-                if (users.length > 0) {
-                    users.forEach(user => {
-                        const item = document.createElement('div');
-                        item.className = 'search-result-item';
-                        item.innerHTML = DOMPurify.sanitize(user.username);
-                        item.onclick = () => {
-                            activateChat(user, user.username);
-                            dom.userSearchInput.value = '';
-                            dom.searchResultsDiv.style.display = 'none';
-                        };
-                        dom.searchResultsDiv.appendChild(item);
-                    });
-                    dom.searchResultsDiv.style.display = 'block';
-                } else {
-                    dom.searchResultsDiv.style.display = 'none';
-                }
-            });
-        }
-
-        async function encryptAndUploadFile(file) {
-            return new Promise((resolve, reject) => {
-                const reader = new FileReader();
-                reader.onload = async (event) => {
-                    try {
-                        const fileBytes = new Uint8Array(event.target.result);
-                        const fileKey = sodium.randombytes_buf(32);
-                        const nonce = sodium.randombytes_buf(24);
-                        
-                        const encryptedContent = sodium.crypto_aead_xchacha20poly1305_ietf_encrypt(
-                            fileBytes, 
-                            null, 
-                            nonce, 
-                            fileKey
-                        );
-                        
-                        const finalEncryptedFile = new Uint8Array(nonce.length + encryptedContent.length);
-                        finalEncryptedFile.set(nonce, 0);
-                        finalEncryptedFile.set(encryptedContent, nonce.length);
-                        
-                        const formData = new FormData();
-                        formData.append('file', new Blob([finalEncryptedFile], { type: 'application/octet-stream' }), 'encrypted_file.dat');
-
-                        const uploadResponse = await fetch('/api/upload', {
-                            method: 'POST',
-                            body: formData,
-                        });
-
-                        if (!uploadResponse.ok) {
-                            let errorText = t('alert_upload_failed');
-                            try {
-                                const errorData = await uploadResponse.json();
-                                errorText = errorData.error || errorText;
-                            } catch (e) {
-                                errorText = `${t('alert_upload_failed')} (HTTP ${uploadResponse.status})`;
-                            }
-                            throw new Error(errorText);
-                        }
-
-                        const result = await uploadResponse.json();
-                        const fileUrl = result.url;
-                        const fileKeyBase64 = sodium.to_base64(fileKey);
-                        
-                        const recipientPKBuffer = sodium.from_base64(dmPartner.publicKey);
-                        const encryptedKeyForRecipient = sodium.crypto_box_seal(fileKeyBase64, recipientPKBuffer);
-                        const ciphertextForRecipient = fileUrl + '::' + sodium.to_base64(encryptedKeyForRecipient);
-
-                        const senderPKBuffer = sodium.from_base64(identity.publicKey);
-                        const encryptedKeyForSender = sodium.crypto_box_seal(fileKeyBase64, senderPKBuffer);
-                        const ciphertextForSender = fileUrl + '::' + sodium.to_base64(encryptedKeyForSender);
-
-                        resolve({ ciphertextForRecipient, ciphertextForSender });
-
-                    } catch (e) {
-                        alert(e.message);
-                        reject(e);
-                    }
-                };
-
-                reader.onerror = () => {
-                    alert(t('alert_file_read_error'));
-                    reject(new Error(t('alert_file_read_error')));
-                };
-                
-                reader.readAsArrayBuffer(file);
-            });
-        }
-
-        async function startChat(id) {
-            identity = id;
-            return new Promise((resolve, reject) => {
-                const timestampHex = Date.now().toString(16).padStart(16, '0');
-                const randomBytes = sodium.to_hex(sodium.randombytes_buf(24));
-                const nonce = timestampHex + randomBytes;
-                const signature = sodium.to_base64(sodium.crypto_sign_detached(sodium.from_hex(nonce), sodium.from_base64(identity.signPrivateKey)));
-                
-                socket = io({ auth: { publicKey: identity.signPublicKey, signature: signature, nonce: nonce } });
-                
-                socket.on('auth_error', (data) => {
-                    alert("Giriş Yapılamadı: " + data.message);
-                    if (socket) socket.disconnect();
-                    dom.loginOverlay.style.display = 'flex';
-                    dom.nameInput.disabled = false;
-                    dom.passwordInput.value = '';
-                    dom.nameInput.focus();
-                    reject(new Error("AUTH_SPECIFIC_ERROR_HANDLED")); 
-                });
-                
-                socket.on('connect', () => {
-                    dom.loginOverlay.style.display = 'none';
-                    dom.mainContainer.style.display = 'flex';
-                    dom.form.style.display = 'flex';
-                    socket.emit('user authenticated', { username: identity.username, boxPublicKey: identity.publicKey });
-                    socket.emit('get conversations');
-                    setupSocketListeners();
-                    
-                    const HEARTBEAT_INTERVAL = 20000;
-                    let heartbeatIntervalId = setInterval(() => { 
-                        if (socket.connected) socket.emit('heartbeat'); 
-                    }, HEARTBEAT_INTERVAL);
-                    
-                    socket.once('disconnect', () => {
-                        clearInterval(heartbeatIntervalId);
-                        document.removeEventListener('visibilitychange', visibilityHandler); 
-                    });
-
-                    const visibilityHandler = () => {
-                        if (document.visibilityState === 'visible' && socket.connected) {
-                            socket.emit('heartbeat');
-                        }
-                    };
-                    document.addEventListener('visibilitychange', visibilityHandler);
-                    if (socket.connected) socket.emit('heartbeat');
-                    
-                    resolve();
-                });
-                
-                socket.on('connect_error', (err) => {
-                    alert(t('connection_error_generic') || "Sunucuya bağlanılamadı. Lütfen daha sonra tekrar deneyin.");
-                    if (socket) socket.disconnect();
-                    dom.loginOverlay.style.display = 'flex';
-                    reject(err);
-                });
-            });
-        }
-
-        function exportIdentity() {
-            const identityString = localStorage.getItem('chatIdentity');
-            if (!identityString) {
-                alert(t('alert_no_identity_to_export') || "Dışa aktarılacak kimlik bulunamadı.");
-                return;
-            }
-            try {
-                const identityData = JSON.parse(identityString);
-                const blob = new Blob([identityString], { type: 'application/json' });
-                const url = URL.createObjectURL(blob);
-                const a = document.createElement('a');
-                a.href = url;
-                a.download = `kimlik_${identityData.username || 'anonim'}.json`;
-                dom.loginBox.appendChild(a);
-                a.click();
-                dom.loginBox.removeChild(a);
-                URL.revokeObjectURL(url);
-            } catch (e) {
-                alert(t('alert_export_failed') || "Kimlik dışa aktarılamadı.");
-            }
-        }
-
-        function importIdentity(event) {
-            const file = event.target.files[0];
-            if (!file) return;
-            const reader = new FileReader();
-            reader.onload = (e) => {
-                try {
-                    const content = e.target.result;
-                    const identityData = JSON.parse(content);
-                    if (identityData.publicKey && identityData.salt && identityData.encryptedSignPrivateKey) {
-                        localStorage.setItem('chatIdentity', content);
-                        alert(t('alert_import_success') || "Kimlik başarıyla içe aktarıldı. Sayfa yenileniyor.");
-                        location.reload();
-                    } else {
-                        throw new Error("Geçersiz kimlik dosyası formatı.");
-                    }
-                } catch (err) {
-                    alert(t('alert_import_failed') || "Kimlik içe aktarılamadı.");
-                }
-            };
-            reader.readAsText(file);
-            event.target.value = '';
-        }
-
-        let existingIdentity = null;
-
-        dom.soundToggle.addEventListener('click', () => {
-            isMuted = !isMuted;
-            dom.soundToggle.textContent = isMuted ? t('sound_toggle_off') : t('sound_toggle_on');
-            if(!isMuted) playSound();
-        });
-        
-        dom.messages.addEventListener('click', (e) => {
-            if (e.target.classList.contains('username-clickable')) {
-                const publicKey = e.target.dataset.publicKey;
-                if (publicKey && publicKey !== identity.publicKey) {
-                    const user = onlineUserMap.get(publicKey);
-                    if (user) activateChat(user, user.username);
-                }
-            }
-            if (e.target.classList.contains('delete-btn')) {
-                const messageId = e.target.dataset.messageId;
-                if (messageId && confirm(t('confirm_delete_message') || 'Bu mesajı herkesten silmek istediğinize emin misiniz?')) {
-                    socket.emit('delete private message', messageId);
-                }
-            }
-        });
-
-        dom.fileInput.addEventListener('change', () => {
-            if (dom.fileInput.files.length > 0) {
-                dom.input.placeholder = `${dom.fileInput.files[0].name} ${t('placeholder_file_attached')}`;
-                dom.input.disabled = true;
-                dom.button.disabled = false;
-            } else {
-                dom.input.placeholder = t('placeholder_write_message');
-                dom.input.disabled = false;
-            }
-        });
-        
-        let searchTimeout;
-        dom.userSearchInput.addEventListener('keyup', (e) => {
-            clearTimeout(searchTimeout);
-            const query = dom.userSearchInput.value.trim();
-            if (query.length > 2) { // Kural: Arama en az 3 karakter olmalı
-                searchTimeout = setTimeout(() => {
-                    socket.emit('search users', query);
-                }, 250);
-            } else {
-                dom.searchResultsDiv.style.display = 'none';
-            }
-        });
-        
-        document.addEventListener('click', (e) => {
-            if (!dom.searchResultsDiv.contains(e.target) && e.target !== dom.userSearchInput) {
-                dom.searchResultsDiv.style.display = 'none';
-            }
-        });
-
-        const handleLoginSubmit = () => {
-            if (existingIdentity) {
-                Auth.loginWithPassword(existingIdentity);
-            } else {
-                Auth.createIdentity();
-            }
-        };
-
-        dom.form.addEventListener('submit', async (e) => {
-            e.preventDefault();
-            
-            const file = dom.fileInput.files[0];
-
-            if (dmPartner) {
-                if (file) {
-                    UI.addLog(t('log_upload_start'), dom.messages, t);
-                    dom.button.disabled = true;
-                    dom.fileUploadLabel.style.cursor = 'progress';
-                    
-                    try {
-                        const { ciphertextForRecipient, ciphertextForSender } = await encryptAndUploadFile(file);
-                        
-                        const payload = { 
-                            recipientPublicKey: dmPartner.publicKey, 
-                            ciphertext_for_recipient: ciphertextForRecipient, 
-                            ciphertext_for_sender: ciphertextForSender,
-                            messageType: 'image'
-                        };
-                        socket.emit('private message', payload);
-                        
-                        UI.addLog(t('log_upload_success'), dom.messages, t); 
-                        
-                    } catch (error) {
-                        UI.addLog(t('log_upload_fail'), dom.messages, t);
-                    } finally {
-                        dom.fileInput.value = '';
-                        dom.input.disabled = false; 
-                        dom.button.disabled = false;
-                        dom.fileUploadLabel.style.cursor = 'pointer';
-                        dom.input.placeholder = t('placeholder_write_message');
-                    }
-
-                } else if (dom.input.value) {
-                    const messageText = dom.input.value;
-                    dom.input.value = '';
-                    
-                    // --- DEĞİŞİKLİK: Mesajı göndermeden önce padding uygula ---
-                    const paddedMessage = padMessage(messageText);
-
-                    const payload = { 
-                        recipientPublicKey: dmPartner.publicKey, 
-                        ciphertext_for_recipient: sodium.to_base64(sodium.crypto_box_seal(paddedMessage, sodium.from_base64(dmPartner.publicKey))), 
-                        ciphertext_for_sender: sodium.to_base64(sodium.crypto_box_seal(paddedMessage, sodium.from_base64(identity.publicKey))),
-                        messageType: 'text'
-                    };
-                    socket.emit('private message', payload);
-                }
-            } else if (dom.input.value) {
-                const messageText = dom.input.value;
-                dom.input.value = '';
-                UI.addChatMessage({ username: identity.username, message: messageText, timestamp: new Date(), isSelf: true, isEncrypted: false }, dom.messages, localStorage.getItem('language'));
-                socket.emit('chat message', { message: messageText });
-            }
-        });
-
-        Auth.initAuth({
-            dom: { loginOverlay: dom.loginOverlay, nameInput: dom.nameInput, passwordInput: dom.passwordInput, submitNameBtn: dom.submitNameBtn },
-            callbacks: { startChat },
-            crypto: { encryptKey: Crypto.encryptKey, decryptKey: Crypto.decryptKey },
-            utils: { t }
-        });
-
-        dom.submitNameBtn.addEventListener('click', handleLoginSubmit);
-        dom.passwordInput.addEventListener('keypress', (e) => { if (e.key === 'Enter') handleLoginSubmit(); });
-        dom.nameInput.addEventListener('keypress', (e) => { if (e.key === 'Enter' && !existingIdentity) handleLoginSubmit(); });
-
-        dom.exportIdentityBtn.addEventListener('click', exportIdentity);
-        dom.importIdentityInput.addEventListener('change', importIdentity);
-
-        existingIdentity = Auth.checkIdentity();
-    })();
+        socket = io({ auth: authData });
+        setupSocketListeners();
+    } catch (error) {
+        console.error("Socket başlatma hatası:", error);
+        UI.showAuthScreen();
+    }
 }
 
-document.addEventListener('DOMContentLoaded', init);
+/**
+ * Gelen bir mesajı şifreler.
+ * @param {string} message - Şifrelenecek metin.
+ * @param {string} recipientPublicKey - Alıcının açık anahtarı.
+ * @returns {Promise<string|null>} Şifrelenmiş metin veya hata durumunda null.
+ */
+async function encryptMessage(message, recipientPublicKey) {
+    try {
+        const myPrivateKey = Crypto.getMyPrivateKey();
+        if (!myPrivateKey) throw new Error("Kişisel anahtar bulunamadı.");
+
+        // Mesajı belirli bir boyuta (örn: 512 byte) tamamla
+        const PADDING_SIZE = 512;
+        const messageBytes = new TextEncoder().encode(message);
+        const paddedMessage = new Uint8Array(PADDING_SIZE);
+        paddedMessage.set(messageBytes);
+
+        const ciphertext = await Crypto.encrypt(paddedMessage, recipientPublicKey, myPrivateKey);
+        return ciphertext;
+    } catch (e) {
+        console.error("Mesaj şifreleme hatası:", e);
+        return null;
+    }
+}
+
+/**
+ * Gelen bir şifreli metni çözer.
+ * @param {string} ciphertext - Şifresi çözülecek metin.
+ * @param {string} senderPublicKey - Gönderenin açık anahtarı.
+ * @param {string} recipientPublicKey - Alıcının açık anahtarı.
+ * @returns {Promise<{message?: string, error?: string}>} Çözülmüş metin veya hata objesi.
+ */
+async function decryptMessage(ciphertext, senderPublicKey, recipientPublicKey) {
+    try {
+        const myPrivateKey = Crypto.getMyPrivateKey();
+        if (!myPrivateKey) {
+            return { error: "Özel anahtar eksik." };
+        }
+
+        const myPublicKey = Crypto.getMyPublicKey();
+        const theirPublicKey = myPublicKey === senderPublicKey ? recipientPublicKey : senderPublicKey;
+
+        if (!theirPublicKey) return { error: "Karşı tarafın açık anahtarı belirlenemedi." };
+        
+        const decryptedRaw = await Crypto.decrypt(ciphertext, theirPublicKey, myPrivateKey);
+        if (!decryptedRaw) return { error: "Şifre çözülemedi (decrypt fonksiyonu null döndü)." };
+
+        // ❌ ESKİ RİSKLİ YÖNTEM
+        // const cleanMessage = decryptedRaw.replace(/\0/g, '');
+
+        // ✅ YENİ GÜVENLİ YÖNTEM (Zamanlama Saldırılarına Karşı Daha Dayanıklı)
+        // İlk null karakterin ('\0') indeksini bul ve mesajı oradan kes.
+        // Bu, .replace() gibi içeriğe bağlı olarak değişken sürede çalışmaz.
+        const nullIndex = decryptedRaw.indexOf('\0');
+        const cleanMessage = nullIndex === -1 ? decryptedRaw : decryptedRaw.substring(0, nullIndex);
+        
+        return { message: cleanMessage };
+    } catch (e) {
+        console.error("Şifre çözme sırasında kritik hata:", e);
+        return { error: `Şifre çözme hatası: ${e.message}` };
+    }
+}
+
+// ============== BİTİŞ: Ana Fonksiyonlar ==============
+
+
+// ============== BAŞLANGIÇ: Olay Dinleyicileri (Socket & DOM) ==============
+
+/**
+ * Socket.IO'dan gelen olayları dinlemek için kurulum yapar.
+ */
+function setupSocketListeners() {
+    socket.on('connect', () => {
+        console.log("Sunucuya başarıyla bağlanıldı. Socket ID:", socket.id);
+        UI.hideAuthScreen();
+        const myPublicKey = Crypto.getMyPublicKey();
+        const myUsername = localStorage.getItem('username');
+        socket.emit('user authenticated', { boxPublicKey: myPublicKey, username: myUsername });
+        socket.emit('get conversations');
+        socket.emit('get conversation history', null); // Genel sohbet geçmişini al
+    });
+    
+    // ... (Diğer socket olayları)
+    socket.on('initial user list', (users) => UI.updateUserList(users));
+    socket.on('user connected', (user) => UI.addUserToList(user));
+    socket.on('user disconnected', (user) => UI.removeUserFromList(user.publicKey));
+    socket.on('conversations list', (partners) => UI.updateConversationsList(partners));
+    socket.on('search results', (results) => UI.displaySearchResults(results));
+    socket.on('new_conversation_partner', (partner) => UI.addConversationPartner(partner));
+    socket.on('auth_error', (error) => {
+        console.error("Kimlik doğrulama hatası:", error.message);
+        alert(`Kimlik doğrulama hatası: ${error.message}`);
+        Auth.logout();
+    });
+
+    socket.on('chat message', (data) => UI.displayMessage(data, false));
+    socket.on('private message', (data) => handleIncomingPrivateMessage(data));
+    socket.on('private message deleted', (messageId) => UI.removeMessageById(messageId));
+    socket.on('conversation history', (data) => UI.displayConversationHistory(data.history, data.partnerPublicKey));
+
+    socket.on('disconnect', () => console.log("Sunucu bağlantısı kesildi."));
+}
+
+/**
+ * Gelen özel mesajları işler.
+ * @param {object} data - Mesaj verisi.
+ */
+async function handleIncomingPrivateMessage(data) {
+    const myPublicKey = Crypto.getMyPublicKey();
+    const isMyMessage = data.senderPublicKey === myPublicKey;
+    const partnerPublicKey = isMyMessage ? data.recipientPublicKey : data.senderPublicKey;
+    
+    let decryptedMessage;
+    // Kendi gönderdiğimiz mesajların şifresini çözmek için ciphertext_for_sender kullan
+    if (isMyMessage && data.ciphertext_for_sender) {
+        decryptedMessage = await decryptMessage(data.ciphertext_for_sender, data.senderPublicKey, data.recipientPublicKey);
+    } else {
+        decryptedMessage = await decryptMessage(data.ciphertext_for_recipient, data.senderPublicKey, data.recipientPublicKey);
+    }
+
+    if (decryptedMessage.error) {
+        console.error(`Mesaj şifresi çözülemedi (${data._id}):`, decryptedMessage.error);
+        return;
+    }
+
+    const messageData = {
+        _id: data._id,
+        username: isMyMessage ? t('you') : conversations.get(partnerPublicKey)?.username || 'Bilinmeyen',
+        message: decryptedMessage.message,
+        timestamp: data.timestamp,
+        publicKey: data.senderPublicKey,
+        isPrivate: true
+    };
+    
+    UI.displayMessage(messageData, isMyMessage, partnerPublicKey);
+}
+
+
+/**
+ * DOM olay dinleyicilerini kurar.
+ */
+function setupDOMListeners() {
+    sendButton.addEventListener('click', sendMessage);
+    messageInput.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' && !e.shiftKey) {
+            e.preventDefault();
+            sendMessage();
+        }
+    });
+
+    searchInput.addEventListener('input', (e) => {
+        const query = e.target.value.trim();
+        if (query.length >= 3) {
+            socket.emit('search users', query);
+        } else {
+            searchResults.innerHTML = '';
+            searchResults.classList.add('hidden');
+        }
+    });
+
+    generalChatRoom.addEventListener('click', () => {
+        UI.switchToConversation(null);
+    });
+}
+
+/**
+ * Mesaj gönderme işlemini tetikler.
+ */
+async function sendMessage() {
+    const message = messageInput.value.trim();
+    if (!message) return;
+
+    if (currentRecipientPublicKey) {
+        // Özel Mesaj
+        const [ciphertextForRecipient, ciphertextForSender] = await Promise.all([
+            encryptMessage(message, currentRecipientPublicKey),
+            encryptMessage(message, currentRecipientPublicKey) // Kendimiz için de şifreliyoruz
+        ]);
+
+        if (ciphertextForRecipient && ciphertextForSender) {
+            socket.emit('private message', {
+                recipientPublicKey: currentRecipientPublicKey,
+                ciphertext_for_recipient: ciphertextForRecipient,
+                ciphertext_for_sender: ciphertextForSender,
+                messageType: 'text'
+            });
+        } else {
+            alert("Mesaj gönderilemedi: Şifreleme hatası.");
+        }
+    } else {
+        // Genel Mesaj
+        const now = Date.now();
+        const lastSent = lastMessageTimestamps.get('general') || 0;
+        if (now - lastSent < MESSAGE_DEBOUNCE_TIME) {
+            UI.showToast("Çok hızlı mesaj gönderiyorsun.");
+            return;
+        }
+        lastMessageTimestamps.set('general', now);
+        socket.emit('chat message', { message }, (response) => {
+            if (response.status === 'ok') {
+                UI.displayMessage({
+                    username: t('you'),
+                    message: message,
+                    timestamp: new Date(),
+                    publicKey: Crypto.getMyPublicKey()
+                }, true, null);
+            } else {
+                UI.showToast(response.message || "Mesaj gönderilemedi.");
+            }
+        });
+    }
+
+    messageInput.value = '';
+    messageInput.style.height = 'auto';
+}
+
+// ============== BİTİŞ: Olay Dinleyicileri ==============
+
+
+// ============== BAŞLANGIÇ: Sayfa Yüklendiğinde ==============
+
+document.addEventListener('DOMContentLoaded', () => {
+    if (Auth.isLoggedIn()) {
+        initializeSocket();
+    } else {
+        UI.showAuthScreen();
+    }
+    setupDOMListeners();
+    Auth.setupAuthListeners();
+});
+
+// ============== BİTİŞ: Sayfa Yüklendiğinde ==============

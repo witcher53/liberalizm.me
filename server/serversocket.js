@@ -1,4 +1,4 @@
-// /server/serversocket.js (Tüm Hataları Giderilmiş Final Sürüm)
+// /server/serversocket.js (MongoDB Injection Koruması Eklenmiş Tam Sürüm)
 
 const { RateLimiterRedis } = require('rate-limiter-flexible');
 const nacl = require('tweetnacl');
@@ -143,22 +143,35 @@ function initializeSocketListeners(io, redisClient) {
             }
         });
 
+        // ✅ GÜNCELLEME: 'search users' fonksiyonu NoSQL Injection'a karşı güçlendirildi.
         socket.on('search users', async (query) => {
             if (!socket.isAuthenticated) return;
             try {
                 await searchLimiter.consume(socket.publicKey);
                 const searchQuery = String(query || '').trim();
+
                 if (searchQuery.length < 3 || searchQuery.length > 15) {
                     socket.emit('search results', []);
                     return;
                 }
-                const escapedQuery = searchQuery.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+                
+                // ❌ ESKİ RİSKLİ YÖNTEM
+                // const escapedQuery = searchQuery.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+                // const users = await usersCollection.find({
+                //     username: { $regex: `^${escapedQuery}`, $options: 'i' }, ...
+
+                // ✅ YENİ GÜVENLİ YÖNTEM (RegEx kullanmadan)
                 const users = await usersCollection.find({
-                    username: { $regex: `^${escapedQuery}`, $options: 'i' },
+                    username: {
+                        $gte: searchQuery,
+                        $lt: searchQuery + 'z' // 'wit' ile başlayanları bulmak için 'wit' ile 'witz' arasındakileri ara
+                    },
                     publicKey: { $ne: socket.publicKey }
                 })
+                .collation({ locale: 'en', strength: 2 }) // Büyük/küçük harf duyarsız arama için
                 .limit(5)
                 .project({ username: 1, publicKey: 1, _id: 0 }).toArray();
+                
                 socket.emit('search results', users);
             } catch (err) {
                 if (!err.msBeforeNext) console.error(`[HATA] 'search users': ${err.message}`, err);
@@ -187,23 +200,27 @@ function initializeSocketListeners(io, redisClient) {
             try {
                 await privateMessageLimiter.consume(socket.publicKey);
                 if (!socket.publicKey || !data.recipientPublicKey) return;
+
                 const senderOnion = await mlmpManager.encryptMetadata(socket.publicKey);
                 const recipientOnion = await mlmpManager.encryptMetadata(data.recipientPublicKey);
                 const senderRouting = await mlmpManager.serverDecryptRouting(senderOnion);
                 const recipientRouting = await mlmpManager.serverDecryptRouting(recipientOnion);
+                const encryptedSenderRoutingHash = Crypto.encryptPointer(senderRouting.routingInfo);
+                const encryptedRecipientRoutingHash = Crypto.encryptPointer(recipientRouting.routingInfo);
                 const senderFingerprint = Crypto.pointerFingerprint(socket.publicKey);
                 const recipientFingerprint = Crypto.pointerFingerprint(data.recipientPublicKey);
+                
                 const dbData = { 
-                    senderPointer: Crypto.encryptPointer(socket.publicKey), 
-                    recipientPointer: Crypto.encryptPointer(data.recipientPublicKey), 
-                    senderFingerprint: senderFingerprint, 
-                    recipientFingerprint: recipientFingerprint, 
+                    senderPointer: Crypto.encryptPointer(socket.publicKey),
+                    recipientPointer: Crypto.encryptPointer(data.recipientPublicKey),
+                    senderFingerprint: senderFingerprint,
+                    recipientFingerprint: recipientFingerprint,
                     mlmp: {
                         senderOnion: senderOnion.onion,
                         recipientOnion: recipientOnion.onion,
                         epoch: senderOnion.epoch,
-                        senderRoutingHash: senderRouting.routingInfo,
-                        recipientRoutingHash: recipientRouting.routingInfo,
+                        encryptedSenderRoutingHash: encryptedSenderRoutingHash,
+                        encryptedRecipientRoutingHash: encryptedRecipientRoutingHash,
                         bucketId: mlmpManager.timing.timeBucketing.bucketizeTimestamp().bucketId,
                         layers: 3
                     },
@@ -212,6 +229,7 @@ function initializeSocketListeners(io, redisClient) {
                     messageType: data.messageType || 'text',
                     ...(data.ciphertext_for_sender && { ciphertext_for_sender: data.ciphertext_for_sender })
                  };
+
                 mlmpManager.queueMessage(dbData, async (messageWithTiming) => {
                     const result = await dmMessagesCollection.insertOne(messageWithTiming);
                     const messageForClient = { 
@@ -220,14 +238,17 @@ function initializeSocketListeners(io, redisClient) {
                         senderPublicKey: socket.publicKey, 
                         recipientPublicKey: data.recipientPublicKey 
                     };
+                    
                     delete messageForClient.senderPointer;
                     delete messageForClient.recipientPointer;
                     delete messageForClient.mlmp;
+
                     if (data.recipientPublicKey !== socket.publicKey) {
                         io.to(data.recipientPublicKey).emit('private message', messageForClient);
                     }
                     socket.emit('private message', messageForClient);
                 });
+
                 const recipientUser = await usersCollection.findOne({ publicKey: data.recipientPublicKey }, { projection: { username: 1, publicKey: 1, _id: 0 } });
                 if (recipientUser) socket.emit('new_conversation_partner', recipientUser);
             } catch (error) {
@@ -250,7 +271,6 @@ function initializeSocketListeners(io, redisClient) {
             }
         });
         
-        // ✅ GÜNCELLEME: 'get conversation history' fonksiyonu tamamen yeniden yazıldı ve düzeltildi
         socket.on('get conversation history', async (otherUserPublicKey) => {
             if (!socket.isAuthenticated) return;
             try {
@@ -259,7 +279,6 @@ function initializeSocketListeners(io, redisClient) {
                     const results = await redisClient.lrange(GENERAL_CHAT_REDIS_KEY, 0, MAX_GENERAL_MESSAGES - 1);
                     history = results.map(item => JSON.parse(item)).reverse();
                 } else {
-                    // İki kullanıcı arasındaki tüm mesajları bulmak için tek bir birleşik sorgu kullanacağız.
                     const myFingerprint = Crypto.pointerFingerprint(socket.publicKey);
                     const otherFingerprint = Crypto.pointerFingerprint(otherUserPublicKey);
 
@@ -268,18 +287,19 @@ function initializeSocketListeners(io, redisClient) {
                     const myRouting = await mlmpManager.serverDecryptRouting(myOnion);
                     const otherRouting = await mlmpManager.serverDecryptRouting(otherOnion);
 
+                    const encryptedMyRoutingHash = Crypto.encryptPointer(myRouting.routingInfo);
+                    const encryptedOtherRoutingHash = Crypto.encryptPointer(otherRouting.routingInfo);
+
                     const query = {
                         $or: [
-                            // 1. Yeni MLMP formatındaki mesajları bul (iki yönlü)
                             {
-                                'mlmp.senderRoutingHash': myRouting.routingInfo,
-                                'mlmp.recipientRoutingHash': otherRouting.routingInfo
+                                'mlmp.encryptedSenderRoutingHash': encryptedMyRoutingHash,
+                                'mlmp.encryptedRecipientRoutingHash': encryptedOtherRoutingHash
                             },
                             {
-                                'mlmp.senderRoutingHash': otherRouting.routingInfo,
-                                'mlmp.recipientRoutingHash': myRouting.routingInfo
+                                'mlmp.encryptedSenderRoutingHash': encryptedOtherRoutingHash,
+                                'mlmp.encryptedRecipientRoutingHash': encryptedMyRoutingHash
                             },
-                            // 2. Eski FINGERPRINT formatındaki mesajları bul (iki yönlü)
                             {
                                 senderFingerprint: myFingerprint,
                                 recipientFingerprint: otherFingerprint
@@ -292,14 +312,14 @@ function initializeSocketListeners(io, redisClient) {
                     };
 
                     history = await dmMessagesCollection.find(query)
-                        .sort({ timestamp: 1 }) // Eskiden yeniye doğru sırala
-                        .limit(200) // Son 200 mesajı al
+                        .sort({ timestamp: 1 })
+                        .limit(200)
                         .toArray();
                     
-                    // Client için veriyi temizle
                     history.forEach(msg => {
                         if (msg.senderPointer) msg.senderPublicKey = Crypto.decryptPointer(msg.senderPointer);
                         if (msg.recipientPointer) msg.recipientPublicKey = Crypto.decryptPointer(msg.recipientPointer);
+                        
                         delete msg.senderPointer;
                         delete msg.recipientPointer;
                         delete msg.mlmp;

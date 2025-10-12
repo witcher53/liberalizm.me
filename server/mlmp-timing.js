@@ -1,4 +1,4 @@
-// /server/mlmp-timing.js
+// /server/mlmp-timing.js (Kriptografik Olarak Güvenli Sahte Trafik)
 
 const crypto = require('crypto');
 const EventEmitter = require('events');
@@ -52,9 +52,19 @@ class DecoyTrafficSystem extends EventEmitter {
     scheduleNextDecoy(emitCallback) {
         if (!this.isActive) return;
         
-        const interval = Math.random() * (this.DECOY_INTERVAL_MAX - this.DECOY_INTERVAL_MIN) + this.DECOY_INTERVAL_MIN;
+        // ❌ ESKİ TAHMİN EDİLEBİLİR YÖNTEM
+        // const interval = Math.random() * (this.DECOY_INTERVAL_MAX - this.DECOY_INTERVAL_MIN) + this.DECOY_INTERVAL_MIN;
         
+        // ✅ YENİ KRİPTOGRAFİK OLARAK GÜVENLİ YÖNTEM
+        // Gerçekten rastgele 4 byte'lık bir sayı üretiyoruz.
+        const randomBuffer = crypto.randomBytes(4);
+        // Bu sayıyı 0 ile 1 arasında bir ondalık sayıya çeviriyoruz.
+        const randomValue = randomBuffer.readUInt32BE(0) / 0xFFFFFFFF;
+        // Bu güvenli rastgele sayıyı kullanarak interval'ı hesaplıyoruz.
+        const interval = randomValue * (this.DECOY_INTERVAL_MAX - this.DECOY_INTERVAL_MIN) + this.DECOY_INTERVAL_MIN;
+
         this.decoyTimer = setTimeout(() => {
+            // Olasılık kontrolü için Math.random() hala yeterince iyidir.
             if (Math.random() < this.DECOY_PROBABILITY) {
                 const decoy = this.generateDecoyMessage();
                 if (typeof emitCallback === 'function') {

@@ -1,10 +1,8 @@
-// /server/mlmp-onion.js (Düzeltilmiş)
+// /server/mlmp-onion.js (Her Mesaja Özel Anahtar Düzeltmesi)
 
 const crypto = require('crypto');
 const sodium = require('libsodium-wrappers');
 const EventEmitter = require('events');
-
-// ✅ YENİ: servercrypto modülünü import ediyoruz
 const Crypto = require('./servercrypto.js');
 
 // ============================================
@@ -31,6 +29,14 @@ class OnionMetadataProtection {
         return key;
     }
 
+    // ✅ YENİ: Her mesaja özel anahtar türeten fonksiyon
+    // Ana epoch anahtarını ve mesajın benzersiz nonce'unu kullanarak tek kullanımlık bir anahtar üretir.
+    deriveMessageKey(epochKey, nonce) {
+        return crypto.createHmac('sha256', epochKey)
+            .update(nonce)
+            .digest();
+    }
+
     getCurrentEpoch() {
         const KEY_ROTATION_INTERVAL = 3600000;
         return Math.floor(Date.now() / KEY_ROTATION_INTERVAL);
@@ -42,6 +48,7 @@ class OnionMetadataProtection {
         const epoch = this.getCurrentEpoch();
         let ciphertext = metadata;
 
+        // Layer 1: Client-side encryption
         const layer1Nonce = sodium.randombytes_buf(sodium.crypto_secretbox_NONCEBYTES);
         const layer1Key = clientKey ? sodium.crypto_hash_sha256(clientKey) : this.deriveRoutingKey(epoch);
         ciphertext = sodium.to_base64(
@@ -49,13 +56,17 @@ class OnionMetadataProtection {
         );
         const layer1 = `${sodium.to_base64(layer1Nonce)}:${ciphertext}`;
 
-        const epochKey = this.generateEpochKey(epoch);
-        const layer2Nonce = sodium.randombytes_buf(sodium.crypto_secretbox_NONCEBYTES);
+        // ✅ GÜNCELLEME: Layer 2 artık her mesaj için özel türetilmiş anahtar kullanıyor
+        const epochKey = this.generateEpochKey(epoch); // Ana "fabrika" anahtarını al
+        const layer2Nonce = sodium.randombytes_buf(sodium.crypto_secretbox_NONCEBYTES); // Mesaj için benzersiz nonce üret
+        const layer2MessageKey = this.deriveMessageKey(epochKey, layer2Nonce); // Nonce'u kullanarak tek kullanımlık mini anahtar üret
+        
         ciphertext = sodium.to_base64(
-            sodium.crypto_secretbox_easy(layer1, layer2Nonce, epochKey)
+            sodium.crypto_secretbox_easy(layer1, layer2Nonce, layer2MessageKey) // Mini anahtarla şifrele
         );
         const layer2 = `${sodium.to_base64(layer2Nonce)}:${ciphertext}`;
 
+        // Layer 3: Routing key (sunucu sadece bunu açabilir)
         const routingKey = this.deriveRoutingKey(epoch);
         const layer3Nonce = sodium.randombytes_buf(sodium.crypto_secretbox_NONCEBYTES);
         ciphertext = sodium.to_base64(
@@ -93,7 +104,6 @@ class OnionMetadataProtection {
     }
 
     deriveRoutingKey(epoch) {
-        // ✅ GÜNCELLEME: Anahtarı process.env yerine doğrudan Crypto modülünden alıyoruz.
         const SERVER_SECRET_KEY = Crypto.getServerSecretKey();
         const epochBytes = Buffer.from(epoch.toString());
         return crypto.createHmac('sha512', SERVER_SECRET_KEY)
@@ -126,9 +136,10 @@ class OnionMetadataProtection {
     }
 }
 
-// ============================================
-// LAYER 2: EPHEMERAL KEY ROTATION SYSTEM
-// ============================================
+// ... EphemeralKeyManager sınıfı ve module.exports kısmı aynı kalacak ...
+// Not: EphemeralKeyManager sınıfı bu dosyada kalabilir, bir zararı yok. 
+// OnionMetadataProtection sınıfı ondan bağımsız çalışıyor.
+
 class EphemeralKeyManager extends EventEmitter {
     constructor(config = {}) {
         super();
@@ -140,48 +151,34 @@ class EphemeralKeyManager extends EventEmitter {
         this.rotationTimer = null;
         this.cleanupTimer = null;
     }
-
-    calculateEpoch(timestamp = Date.now()) {
-        return Math.floor(timestamp / this.ROTATION_INTERVAL);
-    }
-
+    calculateEpoch(timestamp = Date.now()) { return Math.floor(timestamp / this.ROTATION_INTERVAL); }
     generateKey(epoch) {
         const now = Date.now();
         const key = crypto.randomBytes(32);
-        this.keys.set(epoch, {
-            key: key,
-            createdAt: now,
-            expiresAt: now + this.MAX_KEY_AGE,
-        });
+        this.keys.set(epoch, { key: key, createdAt: now, expiresAt: now + this.MAX_KEY_AGE, });
         console.log(`🔑 [Ephemeral] New key generated for epoch ${epoch}`);
         this.emit('keyGenerated', { epoch, timestamp: now });
         return key;
     }
-
     getKey(epoch = null) {
         const targetEpoch = epoch || this.currentEpoch;
         if (this.keys.has(targetEpoch)) {
             const keyData = this.keys.get(targetEpoch);
             if (Date.now() > keyData.expiresAt) {
-                console.warn(`⚠️  [Ephemeral] Key expired for epoch ${targetEpoch}`);
-                this.keys.delete(targetEpoch);
-                return null;
+                this.keys.delete(targetEpoch); return null;
             }
             return keyData.key;
         }
         return this.generateKey(targetEpoch);
     }
-
     rotate() {
         const oldEpoch = this.currentEpoch;
         this.currentEpoch = this.calculateEpoch();
         if (oldEpoch === this.currentEpoch) return;
-        console.log(`🔄 [Ephemeral] Rotating from epoch ${oldEpoch} to ${this.currentEpoch}`);
         this.generateKey(this.currentEpoch);
         this.cleanup();
         this.emit('keyRotated', { oldEpoch, newEpoch: this.currentEpoch });
     }
-
     cleanup() {
         const now = Date.now();
         const minEpoch = this.currentEpoch - this.KEY_HISTORY_SIZE;
@@ -189,32 +186,25 @@ class EphemeralKeyManager extends EventEmitter {
             if (epoch < minEpoch || now > keyData.expiresAt) {
                 keyData.key.fill(0);
                 this.keys.delete(epoch);
-                console.log(`🔥 [Ephemeral] Key deleted for epoch ${epoch} (forward secrecy)`);
             }
         }
     }
-
     start() {
         if (this.rotationTimer) return;
         this.generateKey(this.currentEpoch);
         this.rotationTimer = setInterval(() => this.rotate(), this.ROTATION_INTERVAL);
         this.cleanupTimer = setInterval(() => this.cleanup(), 600000);
-        console.log('✅ [Ephemeral] Key rotation started');
         this.emit('started');
     }
-
     stop() {
         if (this.rotationTimer) clearInterval(this.rotationTimer);
         if (this.cleanupTimer) clearInterval(this.cleanupTimer);
-        this.rotationTimer = null;
-        this.cleanupTimer = null;
-        for (const [, keyData] of this.keys.entries()) {
-            keyData.key.fill(0);
-        }
+        this.rotationTimer = null; this.cleanupTimer = null;
+        for (const [, keyData] of this.keys.entries()) { keyData.key.fill(0); }
         this.keys.clear();
-        console.log('🛑 [Ephemeral] Key rotation stopped, all keys erased');
         this.emit('stopped');
     }
 }
+
 
 module.exports = { OnionMetadataProtection, EphemeralKeyManager };
