@@ -1,4 +1,4 @@
-// /servermongo.js (Genel Mesajlar Kaldırılmış Sürüm)
+// /servermongo.js (Güncellenmiş Tam Sürüm)
 
 const { MongoClient } = require('mongodb');
 
@@ -6,12 +6,24 @@ let dmMessagesCollection, usersCollection;
 
 async function createAndVerifyIndexes() {
     try {
+        // ✅ GÜNCELLEME: Mevcut index'ler korunuyor
         await dmMessagesCollection.createIndex({ senderFingerprint: 1 });
         await dmMessagesCollection.createIndex({ recipientFingerprint: 1 });
+        
+        // ✅ YENİ: MLMP için index'ler
+        await dmMessagesCollection.createIndex({ 'mlmp.senderRoutingHash': 1 });
+        await dmMessagesCollection.createIndex({ 'mlmp.recipientRoutingHash': 1 });
+        await dmMessagesCollection.createIndex({ 'mlmp.epoch': 1 });
+        await dmMessagesCollection.createIndex({ 'mlmp.bucketId': 1 });
+        
+        // User collection
         await usersCollection.createIndex({ "publicKey": 1 }, { unique: true });
-        // YENİ: Kullanıcı adı aramalarını hızlandırmak için indeks
-        await usersCollection.createIndex({ "username": 1 }); 
-        console.log("✅ [Sunucu] Koleksiyon İndeksleri başarıyla oluşturuldu/doğrulandı.");
+        await usersCollection.createIndex({ "username": 1 });
+        
+        // ✅ YENİ: MLMP metadata için kullanıcı koleksiyonu index'i
+        await usersCollection.createIndex({ 'mlmp.onionPointer': 1 });
+        
+        console.log("✅ [Sunucu] Tüm koleksiyon İndeksleri başarıyla oluşturuldu/doğrulandı (MLMP dahil).");
     } catch (err) {
         if (err.code === 85 || err.codeName === 'IndexOptionsConflict') {
             console.log("✅ [Sunucu] Koleksiyon İndeksleri zaten mevcut, devam ediliyor.");
@@ -49,4 +61,3 @@ module.exports = {
     connectToMongo,
     getCollections
 };
-

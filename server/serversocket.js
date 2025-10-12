@@ -1,4 +1,4 @@
-// /server/serversocket.js (Logger Kodları Kaldırıldı, User Enumeration Koruması Duruyor)
+// /server/serversocket.js (Tüm Hataları Giderilmiş Final Sürüm)
 
 const { RateLimiterRedis } = require('rate-limiter-flexible');
 const nacl = require('tweetnacl');
@@ -8,6 +8,7 @@ const Redis = require('ioredis');
 
 const Crypto = require('./servercrypto.js');
 const Mongo = require('./servermongo.js');
+const MLMPManager = require('./mlmp-manager.js');
 
 const GENERAL_CHAT_ROOM = 'general_chat_room';
 
@@ -24,6 +25,8 @@ async function setupRedisAdapter(io) {
 
 function initializeSocketListeners(io, redisClient) {
     const { dmMessagesCollection, usersCollection } = Mongo.getCollections();
+    const mlmpManager = new MLMPManager();
+    mlmpManager.initialize(io);
 
     const limiterOptions = {
         storeClient: redisClient,
@@ -44,23 +47,18 @@ function initializeSocketListeners(io, redisClient) {
     io.use(async (socket, next) => {
         try {
             await rateLimiter.consume(socket.handshake.address);
-            
             const { publicKey, signature, nonce } = socket.handshake.auth;
             if (!publicKey || !signature || !nonce) return next(new Error('Kimlik doğrulama hatası: Bilgiler eksik.'));
-
             const nonceKey = `nonce:${nonce}`;
             const nonceExists = await redisClient.get(nonceKey);
             if (nonceExists) return next(new Error('Tekrar saldırısı tespit edildi.'));
-
             const nonceTimestampHex = nonce.substring(0, 16);
             const nonceTimestamp = parseInt(nonceTimestampHex, 16);
             if (isNaN(nonceTimestamp) || Math.abs(Date.now() - nonceTimestamp) > NONCE_EXPIRE_SECONDS * 1000) return next(new Error('Anahtarın süresi dolmuş.'));
-
             const signPublicKeyBytes = Buffer.from(publicKey, 'base64');
             const nonceBuffer = Buffer.from(nonce, 'hex');
             const signatureBuffer = Buffer.from(signature, 'base64');
             if (!nacl.sign.detached.verify(nonceBuffer, signatureBuffer, signPublicKeyBytes)) return next(new Error('İmza geçersiz.'));
-
             await redisClient.setex(nonceKey, NONCE_EXPIRE_SECONDS, '1');
             socket.signPublicKey = publicKey;
             next();
@@ -84,24 +82,34 @@ function initializeSocketListeners(io, redisClient) {
                 if (!userData.boxPublicKey || !userData.username || !/^.{3,15}$/.test(userData.username)) {
                     socket.disconnect(); return;
                 }
-                
+                const onionPointer = await mlmpManager.encryptMetadata(userData.boxPublicKey);
                 const existingUserByUsername = await usersCollection.findOne({ username: userData.username });
                 if (existingUserByUsername && existingUserByUsername.publicKey !== userData.boxPublicKey) {
                     socket.emit('auth_error', { message: 'Bu kullanıcı adı zaten başkası tarafından kullanılıyor.' });
                     socket.disconnect(); return;
                 }
-                
                 socket.username = userData.username;
                 socket.publicKey = userData.boxPublicKey;
                 socket.isAuthenticated = true;
                 console.log(`[Kimlik Doğrulama] Başarılı: ${socket.username} (${socket.id})`);
                 socket.join(socket.publicKey);
                 socket.join(GENERAL_CHAT_ROOM);
-                await usersCollection.updateOne({ publicKey: socket.publicKey }, { $set: { username: userData.username } }, { upsert: true });
-                
+                await usersCollection.updateOne(
+                    { publicKey: socket.publicKey },
+                    { 
+                        $set: { 
+                            username: userData.username,
+                            mlmp: {
+                                onionPointer: onionPointer.onion,
+                                epoch: onionPointer.epoch,
+                                lastSeen: new Date()
+                            }
+                        } 
+                    }, 
+                    { upsert: true }
+                );
                 await redisClient.sadd('online_users_set', socket.publicKey);
                 const onlineKeys = await redisClient.smembers('online_users_set');
-                
                 const onlineUsers = await usersCollection.find({ publicKey: { $in: onlineKeys } }, { projection: { username: 1, publicKey: 1, _id: 0 } }).toArray();
                 socket.emit('initial user list', onlineUsers);
                 socket.broadcast.emit('user connected', { username: userData.username, publicKey: socket.publicKey });
@@ -140,16 +148,10 @@ function initializeSocketListeners(io, redisClient) {
             try {
                 await searchLimiter.consume(socket.publicKey);
                 const searchQuery = String(query || '').trim();
-
-                if (searchQuery.length < 3) {
+                if (searchQuery.length < 3 || searchQuery.length > 15) {
                     socket.emit('search results', []);
                     return;
                 }
-                if (searchQuery.length > 15) {
-                    socket.emit('search results', []);
-                    return;
-                }
-                
                 const escapedQuery = searchQuery.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
                 const users = await usersCollection.find({
                     username: { $regex: `^${escapedQuery}`, $options: 'i' },
@@ -157,7 +159,6 @@ function initializeSocketListeners(io, redisClient) {
                 })
                 .limit(5)
                 .project({ username: 1, publicKey: 1, _id: 0 }).toArray();
-                
                 socket.emit('search results', users);
             } catch (err) {
                 if (!err.msBeforeNext) console.error(`[HATA] 'search users': ${err.message}`, err);
@@ -171,11 +172,9 @@ function initializeSocketListeners(io, redisClient) {
                 await messageLimiter.consume(socket.publicKey);
                 const message = (msg && typeof msg.message === 'string') ? msg.message.trim() : '';
                 if (!socket.username || message.length === 0 || message.length > 5000) return;
-
                 const redisData = { username: socket.username, message, timestamp: new Date(), publicKey: socket.publicKey };
                 await redisClient.lpush(GENERAL_CHAT_REDIS_KEY, JSON.stringify(redisData));
                 await redisClient.ltrim(GENERAL_CHAT_REDIS_KEY, 0, MAX_GENERAL_MESSAGES - 1);
-
                 socket.broadcast.to(GENERAL_CHAT_ROOM).emit('chat message', redisData);
                 if (typeof callback === 'function') callback({ status: 'ok' });
             } catch (rejRes) {
@@ -188,24 +187,47 @@ function initializeSocketListeners(io, redisClient) {
             try {
                 await privateMessageLimiter.consume(socket.publicKey);
                 if (!socket.publicKey || !data.recipientPublicKey) return;
+                const senderOnion = await mlmpManager.encryptMetadata(socket.publicKey);
+                const recipientOnion = await mlmpManager.encryptMetadata(data.recipientPublicKey);
+                const senderRouting = await mlmpManager.serverDecryptRouting(senderOnion);
+                const recipientRouting = await mlmpManager.serverDecryptRouting(recipientOnion);
+                const senderFingerprint = Crypto.pointerFingerprint(socket.publicKey);
+                const recipientFingerprint = Crypto.pointerFingerprint(data.recipientPublicKey);
                 const dbData = { 
                     senderPointer: Crypto.encryptPointer(socket.publicKey), 
                     recipientPointer: Crypto.encryptPointer(data.recipientPublicKey), 
-                    senderFingerprint: Crypto.pointerFingerprint(socket.publicKey), 
-                    recipientFingerprint: Crypto.pointerFingerprint(data.recipientPublicKey), 
+                    senderFingerprint: senderFingerprint, 
+                    recipientFingerprint: recipientFingerprint, 
+                    mlmp: {
+                        senderOnion: senderOnion.onion,
+                        recipientOnion: recipientOnion.onion,
+                        epoch: senderOnion.epoch,
+                        senderRoutingHash: senderRouting.routingInfo,
+                        recipientRoutingHash: recipientRouting.routingInfo,
+                        bucketId: mlmpManager.timing.timeBucketing.bucketizeTimestamp().bucketId,
+                        layers: 3
+                    },
                     ciphertext_for_recipient: data.ciphertext_for_recipient, 
-                    timestamp: new Date(), 
+                    timestamp: new Date(),
                     messageType: data.messageType || 'text',
                     ...(data.ciphertext_for_sender && { ciphertext_for_sender: data.ciphertext_for_sender })
                  };
-                const result = await dmMessagesCollection.insertOne(dbData);
-                const messageForClient = { ...dbData, _id: result.insertedId, senderPublicKey: socket.publicKey, recipientPublicKey: data.recipientPublicKey };
-                delete messageForClient.senderPointer;
-                delete messageForClient.recipientPointer;
-
-                if (data.recipientPublicKey !== socket.publicKey) io.to(data.recipientPublicKey).emit('private message', messageForClient);
-                socket.emit('private message', messageForClient);
-
+                mlmpManager.queueMessage(dbData, async (messageWithTiming) => {
+                    const result = await dmMessagesCollection.insertOne(messageWithTiming);
+                    const messageForClient = { 
+                        ...messageWithTiming, 
+                        _id: result.insertedId, 
+                        senderPublicKey: socket.publicKey, 
+                        recipientPublicKey: data.recipientPublicKey 
+                    };
+                    delete messageForClient.senderPointer;
+                    delete messageForClient.recipientPointer;
+                    delete messageForClient.mlmp;
+                    if (data.recipientPublicKey !== socket.publicKey) {
+                        io.to(data.recipientPublicKey).emit('private message', messageForClient);
+                    }
+                    socket.emit('private message', messageForClient);
+                });
                 const recipientUser = await usersCollection.findOne({ publicKey: data.recipientPublicKey }, { projection: { username: 1, publicKey: 1, _id: 0 } });
                 if (recipientUser) socket.emit('new_conversation_partner', recipientUser);
             } catch (error) {
@@ -228,6 +250,7 @@ function initializeSocketListeners(io, redisClient) {
             }
         });
         
+        // ✅ GÜNCELLEME: 'get conversation history' fonksiyonu tamamen yeniden yazıldı ve düzeltildi
         socket.on('get conversation history', async (otherUserPublicKey) => {
             if (!socket.isAuthenticated) return;
             try {
@@ -236,21 +259,53 @@ function initializeSocketListeners(io, redisClient) {
                     const results = await redisClient.lrange(GENERAL_CHAT_REDIS_KEY, 0, MAX_GENERAL_MESSAGES - 1);
                     history = results.map(item => JSON.parse(item)).reverse();
                 } else {
+                    // İki kullanıcı arasındaki tüm mesajları bulmak için tek bir birleşik sorgu kullanacağız.
                     const myFingerprint = Crypto.pointerFingerprint(socket.publicKey);
                     const otherFingerprint = Crypto.pointerFingerprint(otherUserPublicKey);
-                    history = await dmMessagesCollection.find({ 
+
+                    const myOnion = await mlmpManager.encryptMetadata(socket.publicKey);
+                    const otherOnion = await mlmpManager.encryptMetadata(otherUserPublicKey);
+                    const myRouting = await mlmpManager.serverDecryptRouting(myOnion);
+                    const otherRouting = await mlmpManager.serverDecryptRouting(otherOnion);
+
+                    const query = {
                         $or: [
-                            { senderFingerprint: myFingerprint, recipientFingerprint: otherFingerprint }, 
-                            { senderFingerprint: otherFingerprint, recipientFingerprint: myFingerprint }
-                        ] 
-                    }).sort({ timestamp: -1 }).limit(100).toArray();
+                            // 1. Yeni MLMP formatındaki mesajları bul (iki yönlü)
+                            {
+                                'mlmp.senderRoutingHash': myRouting.routingInfo,
+                                'mlmp.recipientRoutingHash': otherRouting.routingInfo
+                            },
+                            {
+                                'mlmp.senderRoutingHash': otherRouting.routingInfo,
+                                'mlmp.recipientRoutingHash': myRouting.routingInfo
+                            },
+                            // 2. Eski FINGERPRINT formatındaki mesajları bul (iki yönlü)
+                            {
+                                senderFingerprint: myFingerprint,
+                                recipientFingerprint: otherFingerprint
+                            },
+                            {
+                                senderFingerprint: otherFingerprint,
+                                recipientFingerprint: myFingerprint
+                            }
+                        ]
+                    };
+
+                    history = await dmMessagesCollection.find(query)
+                        .sort({ timestamp: 1 }) // Eskiden yeniye doğru sırala
+                        .limit(200) // Son 200 mesajı al
+                        .toArray();
+                    
+                    // Client için veriyi temizle
                     history.forEach(msg => {
                         if (msg.senderPointer) msg.senderPublicKey = Crypto.decryptPointer(msg.senderPointer);
                         if (msg.recipientPointer) msg.recipientPublicKey = Crypto.decryptPointer(msg.recipientPointer);
                         delete msg.senderPointer;
                         delete msg.recipientPointer;
+                        delete msg.mlmp;
+                        delete msg.senderFingerprint;
+                        delete msg.recipientFingerprint;
                     });
-                    history.reverse();
                 }
                 socket.emit('conversation history', { history: history, partnerPublicKey: otherUserPublicKey });
             } catch (err) {

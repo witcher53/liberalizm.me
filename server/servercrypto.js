@@ -1,4 +1,4 @@
-// /servercrypto.js (Düzeltilmiş)
+// /servercrypto.js (Daha Sağlam Hata Kontrolü ile Güncellendi)
 const crypto = require('crypto');
 
 const ALGORITHM = 'aes-256-gcm';
@@ -14,6 +14,13 @@ function setServerSecretKey(keyBuffer) {
     } else {
         throw new Error("Geçersiz SERVER_SECRET_KEY uzunluğu.");
     }
+}
+
+function getServerSecretKey() {
+    if (!SERVER_SECRET_KEY) {
+        throw new Error("SERVER_SECRET_KEY henüz ayarlanmadı. Vault'un önce başlatıldığından emin olun.");
+    }
+    return SERVER_SECRET_KEY;
 }
 
 function setFPEMasterKey(key) {
@@ -39,10 +46,31 @@ function encryptPointer(publicKey) {
 }
 
 function decryptPointer(encryptedPointer) {
-    if (!SERVER_SECRET_KEY) { console.error("!!! decryptPointer: SERVER_SECRET_KEY hazır değil!"); return null; }
+    // ✅ GÜNCELLEME: Girişin null, undefined veya geçerli bir string olup olmadığını kontrol et
+    if (!encryptedPointer || typeof encryptedPointer !== 'string') {
+        // Bu bir hata değil, beklenen bir durum olabilir, bu yüzden sessizce null dön.
+        return null;
+    }
+    
+    if (!SERVER_SECRET_KEY) { 
+        console.error("!!! decryptPointer: SERVER_SECRET_KEY hazır değil!"); 
+        return null; 
+    }
+
     try {
-        if (!encryptedPointer.startsWith('v1$')) throw new Error('Unknown pointer version');
+        // Bu kontrol artık güvenli çünkü encryptedPointer'ın bir string olduğunu biliyoruz.
+        if (!encryptedPointer.startsWith('v1$')) {
+            // Hatalı formatlı veriyi logla ama çökme.
+            console.warn(`[Crypto] Bilinmeyen işaretçi versiyonu, atlanıyor: ${encryptedPointer.substring(0, 10)}...`);
+            return null;
+        }
+        
         const parts = encryptedPointer.slice(3).split(':');
+        if (parts.length !== 3) {
+            console.warn(`[Crypto] Hatalı işaretçi yapısı, atlanıyor.`);
+            return null;
+        }
+
         const iv = Buffer.from(parts[0], 'hex');
         const authTag = Buffer.from(parts[1], 'hex');
         const encryptedText = parts[2];
@@ -51,7 +79,10 @@ function decryptPointer(encryptedPointer) {
         let decrypted = decipher.update(encryptedText, 'hex', 'utf8');
         decrypted += decipher.final('utf8');
         return decrypted;
-    } catch (error) { console.error("İşaretçi çözülürken hata:", error); return null; }
+    } catch (error) { 
+        console.error("İşaretçi çözülürken kritik hata:", error.message); 
+        return null; 
+    }
 }
 
 function pointerFingerprint(publicKey) {
@@ -61,6 +92,7 @@ function pointerFingerprint(publicKey) {
 
 module.exports = {
     setServerSecretKey,
+    getServerSecretKey,
     setFPEMasterKey,
     getFPEMasterKey,
     createMasterKey,
