@@ -1,7 +1,40 @@
-// /public/client.js (TAM DÜZELTİLMİŞ SÜRÜM)
+// /public/client.js (Metadata Padding Eklenmiş Tam Sürüm)
+
 import * as Crypto from './crypto.js';
 import * as UI from './ui.js';
 import * as Auth from './auth.js';
+
+// --- BAŞLANGIÇ: Metadata Padding Fonksiyonu ---
+/**
+ * Mesajları standart boyutlara tamamlayarak metadata sızıntısını önler.
+ * @param {string} messageText - Şifrelenecek orijinal mesaj.
+ * @returns {string} - Standart bir boyuta getirilmiş mesaj.
+ */
+function padMessage(messageText) {
+    const textEncoder = new TextEncoder();
+    const messageBytes = textEncoder.encode(messageText);
+    
+    // Standart blok boyutları (byte cinsinden)
+    const sizes = [128, 256, 512, 1024, 2048, 4096];
+    
+    // Mesajı sığdırabileceğimiz en küçük standart boyutu bul
+    const targetSize = sizes.find(s => s > messageBytes.length) || sizes[sizes.length - 1];
+    
+    // Eğer mesaj zaten çok uzunsa, en büyük boyuta kırp (bu nadir bir durum)
+    if (messageBytes.length >= targetSize) {
+        return messageText;
+    }
+
+    // Gerekli dolgu miktarını hesapla
+    const paddingNeeded = targetSize - messageBytes.length;
+    
+    // Anlamsız boşluk karakteri (\u0000) ile doldur
+    const padding = '\0'.repeat(paddingNeeded);
+    
+    return messageText + padding;
+}
+// --- BİTİŞ: Metadata Padding Fonksiyonu ---
+
 
 function init() {
     (async () => {
@@ -65,7 +98,6 @@ function init() {
             keyFingerprintContainer: document.getElementById('key-fingerprint-container'),
             fileInput: document.getElementById('file-input'),
             fileUploadLabel: document.getElementById('file-upload-label'),
-            // YENİ DOM ELEMENTLERİ
             userSearchInput: document.getElementById('user-search-input'),
             searchResultsDiv: document.getElementById('search-results'),
         };
@@ -201,12 +233,14 @@ function init() {
                                         privateKeyBuffer
                                     )
                                 ); 
+                                // Gelen padding'i temizle
+                                const cleanMessage = decrypted.replace(/\0/g, '');
                                 const senderUsername = isSelf ? identity.username : (dmPartner?.username || onlineUserMap.get(data.partnerPublicKey)?.username || 'Bilinmeyen'); 
                                 
                                 UI.addChatMessage({ 
                                     _id: msg._id, 
                                     username: senderUsername, 
-                                    message: decrypted, 
+                                    message: cleanMessage, 
                                     timestamp: msg.timestamp, 
                                     isSelf: isSelf, 
                                     isEncrypted: true, 
@@ -229,7 +263,6 @@ function init() {
                                 }, dom.messages, localStorage.getItem('language')); 
                             }
                         } catch (e) { 
-                            console.error("Mesaj deşifre hatası:", e);
                             UI.addLog(t('log_undecryptable_message'), dom.messages, t); 
                         } 
                     } else { 
@@ -261,13 +294,15 @@ function init() {
                                     privateKeyBuffer
                                 )
                             ); 
+                            // Gelen padding'i temizle
+                            const cleanMessage = decrypted.replace(/\0/g, '');
                             const senderUsername = isSelf ? identity.username : (dmPartner?.username || 'Bilinmeyen');
                             playSound(); 
                             
                             UI.addChatMessage({ 
                                 _id: msg._id, 
                                 username: senderUsername, 
-                                message: decrypted, 
+                                message: cleanMessage, 
                                 timestamp: new Date(), 
                                 isSelf: isSelf, 
                                 isEncrypted: true, 
@@ -291,7 +326,6 @@ function init() {
                             }, dom.messages, localStorage.getItem('language')); 
                         }
                     } catch (e) { 
-                        console.error("Mesaj deşifre hatası:", e);
                         UI.addLog(t('log_undecryptable_message'), dom.messages, t); 
                     }
                 } else if (!isSelf) { 
@@ -324,14 +358,12 @@ function init() {
                 }
             });
 
-            // YENİ: ARAMA SONUÇLARI İÇİN LISTENER
             socket.on('search results', (users) => {
                 dom.searchResultsDiv.innerHTML = '';
                 if (users.length > 0) {
                     users.forEach(user => {
                         const item = document.createElement('div');
                         item.className = 'search-result-item';
-                        // XSS'e karşı DOMPurify ile kullanıcı adını temizliyoruz.
                         item.innerHTML = DOMPurify.sanitize(user.username);
                         item.onclick = () => {
                             activateChat(user, user.username);
@@ -401,7 +433,6 @@ function init() {
                         resolve({ ciphertextForRecipient, ciphertextForSender });
 
                     } catch (e) {
-                        console.error("Dosya şifreleme/yükleme hatası:", e);
                         alert(e.message);
                         reject(e);
                     }
@@ -437,7 +468,6 @@ function init() {
                 });
                 
                 socket.on('connect', () => {
-                    console.log("Bağlantı başarılı, kimlik doğrulandı.");
                     dom.loginOverlay.style.display = 'none';
                     dom.mainContainer.style.display = 'flex';
                     dom.form.style.display = 'flex';
@@ -467,7 +497,6 @@ function init() {
                 });
                 
                 socket.on('connect_error', (err) => {
-                    console.error("Bağlantı Hatası (Detay):", err.message);
                     alert(t('connection_error_generic') || "Sunucuya bağlanılamadı. Lütfen daha sonra tekrar deneyin.");
                     if (socket) socket.disconnect();
                     dom.loginOverlay.style.display = 'flex';
@@ -495,7 +524,6 @@ function init() {
                 URL.revokeObjectURL(url);
             } catch (e) {
                 alert(t('alert_export_failed') || "Kimlik dışa aktarılamadı.");
-                console.error("Kimlik dışa aktarılamadı:", e);
             }
         }
 
@@ -516,7 +544,6 @@ function init() {
                     }
                 } catch (err) {
                     alert(t('alert_import_failed') || "Kimlik içe aktarılamadı.");
-                    console.error("Kimlik içe aktarılamadı:", err);
                 }
             };
             reader.readAsText(file);
@@ -558,13 +585,11 @@ function init() {
             }
         });
         
-        // YENİ: ARAMA İÇİN EVENT LISTENER'LAR
         let searchTimeout;
         dom.userSearchInput.addEventListener('keyup', (e) => {
             clearTimeout(searchTimeout);
             const query = dom.userSearchInput.value.trim();
-            if (query.length > 0) {
-                // Her tuş vuruşunda sunucuyu meşgul etmemek için küçük bir gecikme ekliyoruz.
+            if (query.length > 2) { // Kural: Arama en az 3 karakter olmalı
                 searchTimeout = setTimeout(() => {
                     socket.emit('search users', query);
                 }, 250);
@@ -573,13 +598,11 @@ function init() {
             }
         });
         
-        // Arama kutusu dışına tıklandığında sonuçları gizle
         document.addEventListener('click', (e) => {
             if (!dom.searchResultsDiv.contains(e.target) && e.target !== dom.userSearchInput) {
                 dom.searchResultsDiv.style.display = 'none';
             }
         });
-
 
         const handleLoginSubmit = () => {
             if (existingIdentity) {
@@ -614,7 +637,6 @@ function init() {
                         UI.addLog(t('log_upload_success'), dom.messages, t); 
                         
                     } catch (error) {
-                        console.error("Dosya yükleme/gönderme başarısız:", error);
                         UI.addLog(t('log_upload_fail'), dom.messages, t);
                     } finally {
                         dom.fileInput.value = '';
@@ -627,10 +649,14 @@ function init() {
                 } else if (dom.input.value) {
                     const messageText = dom.input.value;
                     dom.input.value = '';
+                    
+                    // --- DEĞİŞİKLİK: Mesajı göndermeden önce padding uygula ---
+                    const paddedMessage = padMessage(messageText);
+
                     const payload = { 
                         recipientPublicKey: dmPartner.publicKey, 
-                        ciphertext_for_recipient: sodium.to_base64(sodium.crypto_box_seal(messageText, sodium.from_base64(dmPartner.publicKey))), 
-                        ciphertext_for_sender: sodium.to_base64(sodium.crypto_box_seal(messageText, sodium.from_base64(identity.publicKey))),
+                        ciphertext_for_recipient: sodium.to_base64(sodium.crypto_box_seal(paddedMessage, sodium.from_base64(dmPartner.publicKey))), 
+                        ciphertext_for_sender: sodium.to_base64(sodium.crypto_box_seal(paddedMessage, sodium.from_base64(identity.publicKey))),
                         messageType: 'text'
                     };
                     socket.emit('private message', payload);
